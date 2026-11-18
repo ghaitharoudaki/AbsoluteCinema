@@ -4,12 +4,19 @@ import { useAuth } from '../lib/AuthContext'
 import type { SearchResult } from '../components/MovieSearch'
 import { ensureMovieInDb, fetchMovieDetails } from '../lib/movies'
 import Dialog, { CloseButton } from './Dialog'
+import type { ExistingRating } from '../pages/RateMovie'
 
 interface MovieDetailProps {
   movie: SearchResult
-  onRate: () => void
+  /** Called with the user's existing rating when they choose "Edit rating", or nothing for a new one. */
+  onRate: (existing?: ExistingRating) => void
   onClose: () => void
-  alreadyRated?: boolean
+}
+
+interface TitleStatus {
+  movieId: string | null
+  rating: ExistingRating | null
+  onWatchlist: boolean
 }
 
 interface CastMember {
@@ -40,11 +47,12 @@ function formatMoney(n: number | null) {
   return `$${(n / 1_000_000).toFixed(1)}M`
 }
 
-export default function MovieDetail({ movie, onRate, onClose, alreadyRated = false }: MovieDetailProps) {
+export default function MovieDetail({ movie, onRate, onClose }: MovieDetailProps) {
   const { user } = useAuth()
   const [details, setDetails] = useState<Details | null>(null)
   const [loading, setLoading] = useState(true)
-  const [watchlistState, setWatchlistState] = useState<'idle' | 'saving' | 'added'>('idle')
+  const [status, setStatus] = useState<TitleStatus | null>(null)
+  const [watchlistSaving, setWatchlistSaving] = useState(false)
   const [watchlistMessage, setWatchlistMessage] = useState<string | null>(null)
 
   useEffect(() => {
@@ -54,27 +62,49 @@ export default function MovieDetail({ movie, onRate, onClose, alreadyRated = fal
     })
   }, [movie])
 
-  const handleAddToWatchlist = async () => {
+  useEffect(() => {
+    let cancelled = false
+    setStatus(null)
+    api<TitleStatus>(`titles/${movie.tmdb_id}/status?media_type=${movie.media_type}`)
+      .then((data) => !cancelled && setStatus(data))
+      // Without status we fall back to "not rated, not on watchlist"; the server still blocks duplicates.
+      .catch(() => !cancelled && setStatus({ movieId: null, rating: null, onWatchlist: false }))
+    return () => {
+      cancelled = true
+    }
+  }, [movie])
+
+  const myRating = status?.rating ?? null
+  const onWatchlist = status?.onWatchlist ?? false
+
+  const toggleWatchlist = async () => {
     if (!user) return
-    if (!details) {
+    if (!details && !onWatchlist) {
       setWatchlistMessage('Details are still loading. Try again in a moment.')
       return
     }
-    setWatchlistState('saving')
+    setWatchlistSaving(true)
     setWatchlistMessage(null)
 
     try {
-      const movieId = await ensureMovieInDb(movie, details)
-      await api('watchlist', { method: 'POST', body: { movie_id: movieId } })
-      setWatchlistState('added')
+      if (onWatchlist && status?.movieId) {
+        await api(`watchlist/${status.movieId}`, { method: 'DELETE' })
+        setStatus((current) => current && { ...current, onWatchlist: false })
+        setWatchlistMessage('Removed from your watchlist.')
+      } else {
+        const movieId = await ensureMovieInDb(movie, details)
+        await api('watchlist', { method: 'POST', body: { movie_id: movieId } })
+        setStatus((current) => ({ movieId, rating: current?.rating ?? null, onWatchlist: true }))
+      }
     } catch (err) {
       console.error(err)
-      setWatchlistState('idle')
       setWatchlistMessage(
         err instanceof ApiError && err.code === 'already_rated'
           ? "You've already logged this, so it stays off your watchlist."
-          : errorMessage(err, "Couldn't add it to your watchlist. Try again."),
+          : errorMessage(err, "Your watchlist didn't update. Try again."),
       )
+    } finally {
+      setWatchlistSaving(false)
     }
   }
 
@@ -145,9 +175,10 @@ export default function MovieDetail({ movie, onRate, onClose, alreadyRated = fal
         </div>
 
         <div className="space-y-7 px-6 pb-6">
-          {alreadyRated && (
-            <p className="rounded-xl bg-brand/10 px-4 py-3 text-sm font-medium text-brand">
-              You've already logged this. Edit your rating from your profile.
+          {myRating && (
+            <p className="flex items-center gap-3 rounded-xl bg-brand/10 px-4 py-3 text-sm font-medium text-brand">
+              <span className="ticket text-base">{Number(myRating.rating).toFixed(1)}</span>
+              You've logged this. Choose Edit rating to change or remove it.
             </p>
           )}
 
@@ -220,25 +251,33 @@ export default function MovieDetail({ movie, onRate, onClose, alreadyRated = fal
         <p role="status" className="mr-auto text-sm text-ink-muted">
           {watchlistMessage}
         </p>
-        <button
-          type="button"
-          onClick={() => void handleAddToWatchlist()}
-          disabled={watchlistState !== 'idle'}
-          className={`rounded-full border px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-default ${
-            watchlistState === 'added' ? 'border-brand/40 bg-brand/10 text-brand' : 'border-line text-ink hover:border-ink-muted'
-          }`}
-        >
-          {watchlistState === 'added' ? 'On your watchlist' : watchlistState === 'saving' ? 'Adding…' : 'Add to watchlist'}
-        </button>
-        {!alreadyRated && (
+        {!myRating && (
           <button
             type="button"
-            onClick={onRate}
-            className="rounded-full bg-brand px-6 py-2 text-sm font-bold text-on-brand transition-colors hover:bg-brand-hover"
+            onClick={() => void toggleWatchlist()}
+            disabled={watchlistSaving || !status}
+            aria-pressed={onWatchlist}
+            title={onWatchlist ? 'Remove from your watchlist' : undefined}
+            className={`group rounded-full border px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-wait disabled:opacity-60 ${
+              onWatchlist ? 'border-brand/40 bg-brand/10 text-brand hover:border-danger hover:bg-danger/10 hover:text-danger' : 'border-line text-ink hover:border-ink-muted'
+            }`}
           >
-            Rate it
+            {watchlistSaving ? 'Saving…' : onWatchlist ? (
+              <>
+                <span className="group-hover:hidden">On your watchlist</span>
+                <span className="hidden group-hover:inline">Remove from watchlist</span>
+              </>
+            ) : 'Add to watchlist'}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => onRate(myRating ?? undefined)}
+          disabled={!status}
+          className="rounded-full bg-brand px-6 py-2 text-sm font-bold text-on-brand transition-colors hover:bg-brand-hover disabled:cursor-wait disabled:opacity-60"
+        >
+          {myRating ? 'Edit rating' : 'Rate it'}
+        </button>
       </div>
     </Dialog>
   )

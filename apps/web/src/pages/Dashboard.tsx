@@ -4,7 +4,7 @@ import { api, errorMessage } from "../lib/api";
 import NavBar from "../components/NavBar";
 import MovieSearch, { type SearchResult } from "../components/MovieSearch";
 import MovieDetail from "../components/MovieDetail";
-import RateMovie from "./RateMovie";
+import RateMovie, { type ExistingRating } from "./RateMovie";
 import Dialog, { CloseButton } from "../components/Dialog";
 
 interface Movie {
@@ -78,7 +78,6 @@ export default function Dashboard() {
   const [recentRatings, setRecentRatings] = useState<Rating[]>([]);
   const [loggedMovies, setLoggedMovies] = useState<Movie[]>([]);
   const [excludedTmdbIds, setExcludedTmdbIds] = useState<Set<number>>(new Set());
-  const [myRatedTmdbIds, setMyRatedTmdbIds] = useState<Set<number>>(new Set());
   const [reactionSummary, setReactionSummary] = useState<Record<string, ReactionSummary>>({});
   const [comments, setComments] = useState<Record<string, Comment[]>>({});
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
@@ -89,6 +88,7 @@ export default function Dashboard() {
 
   const [logStep, setLogStep] = useState<"search" | "detail" | "rate" | null>(null);
   const [selectedMovie, setSelectedMovie] = useState<SearchResult | null>(null);
+  const [editingRating, setEditingRating] = useState<ExistingRating | null>(null);
 
   const displayName = user?.name?.split(" ")[0] || user?.email?.split("@")[0] || "there";
 
@@ -229,7 +229,6 @@ export default function Dashboard() {
       setFeaturedRow(data.featuredRow);
       setRecentRatings(data.recentRatings);
       setLoggedMovies(Array.from(new Map(data.recentRatings.map((rating) => [rating.movie.id, rating.movie])).values()));
-      setMyRatedTmdbIds(new Set(data.myRatedTmdbIds));
       exclude = new Set([...data.recentMovieTmdbIds, ...data.myRatedTmdbIds]);
       setExcludedTmdbIds(exclude);
       applySocialData(data);
@@ -254,6 +253,7 @@ export default function Dashboard() {
   const closeLogFlow = () => {
     setLogStep(null);
     setSelectedMovie(null);
+    setEditingRating(null);
   };
 
   const handleLogDone = () => {
@@ -637,14 +637,21 @@ export default function Dashboard() {
       {logStep === "detail" && selectedMovie && (
         <MovieDetail
           movie={selectedMovie}
-          alreadyRated={myRatedTmdbIds.has(selectedMovie.tmdb_id)}
-          onRate={() => setLogStep("rate")}
+          onRate={(existing) => {
+            setEditingRating(existing ?? null);
+            setLogStep("rate");
+          }}
           onClose={closeLogFlow}
         />
       )}
 
       {logStep === "rate" && selectedMovie && (
-        <RateMovie movie={selectedMovie} onDone={handleLogDone} onCancel={closeLogFlow} />
+        <RateMovie
+          movie={selectedMovie}
+          existingRating={editingRating ?? undefined}
+          onDone={handleLogDone}
+          onCancel={closeLogFlow}
+        />
       )}
     </div>
   );

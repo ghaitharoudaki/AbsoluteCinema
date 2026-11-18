@@ -203,6 +203,22 @@ const profileByUsername: Handler = async ({ user, params }) => {
   }
 }
 
+/** Where a TMDB title stands for the signed-in user: their rating (if any) and watchlist state. */
+const titleStatus: Handler = async ({ user, params, url }) => {
+  const tmdbId = int(params[0], 'tmdb id')
+  const mediaType = url.searchParams.get('media_type') === 'tv' ? 'tv' : 'movie'
+  const rows = await db()`
+    SELECT m.id AS movie_id,
+      (SELECT json_build_object('id', r.id, 'rating', r.rating::float8, 'description', r.description,
+                'watched_date', to_char(r.watched_date, 'YYYY-MM-DD'), 'date_type', COALESCE(r.date_type, 'unknown'))
+         FROM ratings r WHERE r.movie_id = m.id AND r.user_id = ${user.id}) AS rating,
+      EXISTS (SELECT 1 FROM watchlist w WHERE w.movie_id = m.id AND w.user_id = ${user.id}) AS on_watchlist
+    FROM movies m
+    WHERE m.tmdb_id = ${tmdbId} AND COALESCE(m.media_type, 'movie') = ${mediaType}`
+  const row = rows[0]
+  return { movieId: row?.movie_id ?? null, rating: row?.rating ?? null, onWatchlist: row?.on_watchlist ?? false }
+}
+
 /* --------------------------------------------------------------- writes */
 
 /** Inserts a TMDB title if it's new; fills in missing metadata if it isn't. Returns its id. */
@@ -252,13 +268,23 @@ const saveRating: Handler = async ({ user, body }) => {
     return { id: rows[0].id }
   }
 
-  const rows = await sql`
+  const movieId = uuid(body.movie_id, 'movie_id')
+  const inserted = await sql`
     INSERT INTO ratings (user_id, movie_id, rating, description, watched_date, date_type)
-    VALUES (${user.id}, ${uuid(body.movie_id, 'movie_id')}, ${rating}, ${description}, ${watchedDate}, ${dateType})
+    VALUES (${user.id}, ${movieId}, ${rating}, ${description}, ${watchedDate}, ${dateType})
     ON CONFLICT (user_id, movie_id) DO NOTHING
     RETURNING id`
-  if (!rows[0]) throw new HttpError(409, 'You already logged this title', 'already_rated')
-  return { id: rows[0].id }
+  if (!inserted[0]) throw new HttpError(409, 'You already logged this title', 'already_rated')
+  // Logging a title takes it off the watchlist: it's been watched now.
+  await sql`DELETE FROM watchlist WHERE user_id = ${user.id} AND movie_id = ${movieId}`
+  return { id: inserted[0].id }
+}
+
+/** Removes one of your own ratings. Its reactions and comments go with it (ON DELETE CASCADE). */
+const deleteRating: Handler = async ({ user, params }) => {
+  const rows = await db()`DELETE FROM ratings WHERE id = ${uuid(params[0], 'rating id')} AND user_id = ${user.id} RETURNING id`
+  if (!rows[0]) throw new HttpError(404, "That rating is gone or isn't yours to remove")
+  return { status: 'deleted' }
 }
 
 const addToWatchlist: Handler = async ({ user, body }) => {
@@ -381,7 +407,9 @@ const routes: Array<[method: string, pattern: RegExp, handler: Handler]> = [
   ['GET', /^profiles\/([^/]+)$/, profileByUsername],
   ['PATCH', /^profile$/, updateProfile],
   ['POST', /^movies$/, ensureMovie],
+  ['GET', /^titles\/(\d+)\/status$/, titleStatus],
   ['POST', /^ratings$/, saveRating],
+  ['DELETE', /^ratings\/([^/]+)$/, deleteRating],
   ['POST', /^watchlist$/, addToWatchlist],
   ['DELETE', /^watchlist\/([^/]+)$/, removeFromWatchlist],
   ['PUT', /^reactions$/, setReaction],

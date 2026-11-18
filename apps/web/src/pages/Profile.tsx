@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import NavBar from '../components/NavBar'
 import Top5Picker, { type Top5Movie } from '../components/Top5Picker'
 import MovieDetail from '../components/MovieDetail'
+import TierList from '../components/TierList'
 import RateMovie from './RateMovie'
 import Dialog, { CloseButton } from '../components/Dialog'
 import type { SearchResult } from '../components/MovieSearch'
@@ -108,19 +109,8 @@ export default function Profile() {
 
     setTop5(data.top5)
     setRatings(data.ratings)
-    const ratedMovies = data.ratings.map((row) => ({ ...row.movie, rating: Number(row.rating) }))
-    const top5Movies: ProfileMovie[] = data.top5.map((movie) => ({
-      id: movie.movie_id,
-      tmdb_id: movie.tmdb_id ?? 0,
-      title: movie.title,
-      poster_path: movie.poster_path,
-      release_year: movie.release_year,
-      media_type: movie.media_type ?? 'movie',
-      rating: undefined,
-    }))
-    setRecentMovies(
-      [...ratedMovies, ...top5Movies].filter((movie, index, movies) => movies.findIndex((item) => item.id === movie.id) === index),
-    )
+    // Watched is what they've rated; unrated Top 5 picks live only in the Top 5 row.
+    setRecentMovies(data.ratings.map((row) => ({ ...row.movie, rating: Number(row.rating) })))
     setWatchlist(data.watchlist)
     setStats(data.stats)
     setFavoriteGenre(data.favoriteGenre)
@@ -363,60 +353,19 @@ export default function Profile() {
         />
 
         <section className="mt-14" aria-labelledby="tiers-title">
-          <h2 id="tiers-title" className={sectionTitle}>Tier list</h2>
+          <h2 id="tiers-title" className={sectionTitle}>Tier lists</h2>
           <p className="mt-1 text-sm text-ink-muted">
-            {isOwnProfile ? 'Every rating, sorted. Select a poster to change its rating, and it moves to the matching tier.' : `${name}'s ratings, sorted from S to F.`}
+            {isOwnProfile ? 'Films and series ranked separately, best first. Select a poster to change or remove its rating.' : `${name}'s films and series, ranked from S to F.`}
           </p>
-          <div className="mt-6 overflow-hidden rounded-2xl border border-line">
-            {([
-              ['S', 9, 10.1, 'bg-brand text-on-brand'],
-              ['A', 8, 9, 'bg-brand/70 text-on-brand'],
-              ['B', 7, 8, 'bg-brand/40 text-ink'],
-              ['C', 6, 7, 'bg-brand/20 text-ink'],
-              ['D', 4, 6, 'bg-raised text-ink'],
-              ['F', 0, 4, 'bg-raised text-ink-muted'],
-            ] as const).map(([tier, minimum, maximum, tone]) => {
-              const tierRatings = ratings.filter((rating) => {
-                const score = Number(rating.rating)
-                return score >= minimum && score < maximum
-              })
-              return (
-                <div key={tier} className="flex min-h-[7.5rem] border-b border-line bg-surface last:border-b-0">
-                  <div className={`flex w-16 shrink-0 items-center justify-center font-display text-4xl font-black sm:w-20 ${tone}`} aria-label={`${tier} tier`}>
-                    {tier}
-                  </div>
-                  <ul className="flex flex-1 flex-wrap gap-3 p-3">
-                    {tierRatings.length > 0 ? (
-                      tierRatings.map((rating) => (
-                        <li key={rating.id} className="w-[4.5rem] sm:w-20">
-                          <button
-                            type="button"
-                            onClick={() => (isOwnProfile ? setEditingRating(rating) : setSelectedMovie(toSearchResult(rating.movie)))}
-                            aria-label={`${rating.movie.title}, rated ${Number(rating.rating).toFixed(1)}${isOwnProfile ? '. Change rating' : ''}`}
-                            className="group block w-full rounded-lg text-left"
-                          >
-                            <span className="relative block aspect-[2/3] overflow-hidden rounded-lg bg-raised transition-transform group-hover:-translate-y-0.5">
-                              {rating.movie.poster_path ? (
-                                <img src={`https://image.tmdb.org/t/p/w200${rating.movie.poster_path}`} alt="" loading="lazy" className="h-full w-full object-cover" />
-                              ) : (
-                                <span className="flex h-full items-center justify-center p-1 text-center text-[10px] text-ink-muted">{rating.movie.title}</span>
-                              )}
-                            </span>
-                            <span className="mt-1 flex items-center justify-between gap-1 text-xs">
-                              <span className="truncate font-medium">{rating.movie.title}</span>
-                              <span className="shrink-0 font-bold text-brand tabular">{Number(rating.rating).toFixed(1)}</span>
-                            </span>
-                          </button>
-                        </li>
-                      ))
-                    ) : (
-                      <li className="self-center text-sm text-ink-muted">Nothing rated in this range.</li>
-                    )}
-                  </ul>
-                </div>
-              )
-            })}
-          </div>
+          <TierList
+            ratings={ratings}
+            onSelect={(rating) => (isOwnProfile ? setEditingRating(rating) : setSelectedMovie(toSearchResult(rating.movie)))}
+            selectLabel={isOwnProfile ? '. Change rating' : undefined}
+            emptyText={(kind) => {
+              const noun = kind === 'tv' ? 'series' : 'films'
+              return isOwnProfile ? `No ${noun} rated yet. Rate one and it lands in its tier here.` : `${name} hasn’t rated any ${noun} yet.`
+            }}
+          />
         </section>
       </main>
 
@@ -485,16 +434,11 @@ export default function Profile() {
       {selectedMovie && (
         <MovieDetail
           movie={selectedMovie}
-          alreadyRated={ratings.some((rating) => rating.movie.tmdb_id === selectedMovie.tmdb_id)}
-          onRate={() => {
-            const rating = ratings.find((item) => item.movie.tmdb_id === selectedMovie.tmdb_id)
-            if (rating) {
-              setSelectedMovie(null)
-              setEditingRating(rating)
-            } else {
-              setRatingTarget(selectedMovie)
-              setSelectedMovie(null)
-            }
+          onRate={(existing) => {
+            const rating = existing ? ratings.find((item) => item.id === existing.id) : undefined
+            if (rating) setEditingRating(rating)
+            else setRatingTarget(selectedMovie)
+            setSelectedMovie(null)
           }}
           onClose={() => setSelectedMovie(null)}
         />

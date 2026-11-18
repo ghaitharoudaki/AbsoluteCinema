@@ -4,6 +4,7 @@ import NavBar from '../components/NavBar'
 import { useAuth } from '../lib/AuthContext'
 import { api, ApiError } from '../lib/api'
 import { ensureMovieInDb } from '../lib/movies'
+import { normalizeImportedRating } from '../lib/importRating'
 import type { SearchResult } from '../components/MovieSearch'
 
 interface ImportRow {
@@ -92,7 +93,7 @@ function rowsFromFile(
     return [{
       name,
       year: Number.isFinite(parsedYear) ? parsedYear : null,
-      rating: source === 'rating' && Number.isFinite(parsedRating) ? Math.round(parsedRating * 2) / 2 : null,
+      rating: source === 'rating' ? normalizeImportedRating(parsedRating, provider) : null,
       watchedDate: source === 'rating' ? date : null,
       source,
       provider,

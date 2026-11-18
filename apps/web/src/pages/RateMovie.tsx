@@ -6,20 +6,22 @@ import StarRating from '../components/StarRating'
 import Dialog, { CloseButton } from '../components/Dialog'
 import { ensureMovieInDb, fetchMovieDetails } from '../lib/movies'
 
+type DateMode = 'exact' | 'release' | 'unknown'
+
+export interface ExistingRating {
+  id: string
+  rating: number
+  description: string | null
+  watched_date: string | null
+  date_type: DateMode
+}
+
 interface RateMovieProps {
   movie: SearchResult
   onDone: () => void
   onCancel: () => void
-  existingRating?: {
-    id: string
-    rating: number
-    description: string | null
-    watched_date: string | null
-    date_type: DateMode
-  }
+  existingRating?: ExistingRating
 }
-
-type DateMode = 'exact' | 'release' | 'unknown'
 
 interface Details {
   runtime_minutes: number | null
@@ -40,6 +42,8 @@ export default function RateMovie({ movie, onDone, onCancel, existingRating }: R
   const [exactDate, setExactDate] = useState(existingRating?.watched_date ?? '')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const [removing, setRemoving] = useState(false)
 
   useEffect(() => {
     fetchMovieDetails(movie.tmdb_id, movie.media_type).then(setDetails)
@@ -90,6 +94,26 @@ export default function RateMovie({ movie, onDone, onCancel, existingRating }: R
       )
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleRemove = async () => {
+    if (!existingRating?.id) return
+    if (!confirmingRemove) {
+      setConfirmingRemove(true)
+      return
+    }
+    setRemoving(true)
+    setError(null)
+    try {
+      await api(`ratings/${existingRating.id}`, { method: 'DELETE' })
+      onDone()
+    } catch (err) {
+      console.error(err)
+      setError(errorMessage(err, "Your rating wasn't removed. Check your connection and try again."))
+      setConfirmingRemove(false)
+    } finally {
+      setRemoving(false)
     }
   }
 
@@ -188,7 +212,29 @@ export default function RateMovie({ movie, onDone, onCancel, existingRating }: R
           {error}
         </p>
 
-        <div className="-mx-6 -mb-6 flex justify-end gap-2 border-t border-line bg-canvas/40 px-6 py-4">
+        <div className="-mx-6 -mb-6 flex flex-wrap items-center justify-end gap-2 border-t border-line bg-canvas/40 px-6 py-4">
+          {existingRating && (
+            <div className="mr-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleRemove()}
+                disabled={removing || submitting}
+                className={`rounded-full px-3 py-2 text-sm font-semibold transition-colors disabled:opacity-60 ${
+                  confirmingRemove ? 'bg-danger text-canvas hover:bg-danger/90' : 'text-ink-muted hover:text-danger'
+                }`}
+              >
+                {removing ? 'Removing…' : confirmingRemove ? 'Yes, remove it' : 'Remove rating'}
+              </button>
+              {confirmingRemove && !removing && (
+                <span className="text-xs text-ink-muted">
+                  Its likes and comments go too.{' '}
+                  <button type="button" onClick={() => setConfirmingRemove(false)} className="font-semibold underline hover:text-ink">
+                    Keep it
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
           <button
             type="button"
             onClick={onCancel}

@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "migrate:neon": "node --env-file-if-exists=.env.local scripts/migrate-supabase-to-neon.mjs",
-    "db:schema": "node --env-file-if-exists=.env.local scripts/apply-schema.mjs"
+    "db:schema": "node --env-file-if-exists=.env.local scripts/apply-schema.mjs",
+    "db:fix-letterboxd": "node --env-file-if-exists=.env.local scripts/fix-letterboxd-scale.mjs",
+    "test": "node --test \"apps/web/src/**/*.test.ts\" \"api/**/*.test.ts\""
   },
   "keywords": [],
   "author": "",
