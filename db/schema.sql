@@ -123,22 +123,55 @@ CREATE TABLE IF NOT EXISTS predictions (
   UNIQUE (user_id, movie_id)
 );
 
+-- One row per episode a user has ticked off. Independent of rating the series:
+-- you can track a show before (or without) scoring it. Owner-only writes (enforced in API).
+CREATE TABLE IF NOT EXISTS watched_episodes (
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  movie_id UUID NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+  season_number SMALLINT NOT NULL CHECK (season_number >= 0),
+  episode_number SMALLINT NOT NULL CHECK (episode_number >= 1),
+  runtime_minutes INTEGER CHECK (runtime_minutes IS NULL OR runtime_minutes BETWEEN 1 AND 600),
+  watched_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, movie_id, season_number, episode_number)
+);
+CREATE INDEX IF NOT EXISTS idx_watched_episodes_user ON watched_episodes(user_id, watched_at DESC);
+
+-- Hours per user. Films: runtime of every rated film. Series: if the user has logged
+-- episodes, the sum of those episodes' runtimes; otherwise (rated but never tracked)
+-- the old whole-show estimate. Column order is fixed so OR REPLACE keeps working;
+-- new columns go at the end.
 CREATE OR REPLACE VIEW user_watch_stats AS
+WITH films AS (
+  SELECT r.user_id, COALESCE(m.runtime_minutes, 0)::numeric / 60 AS hours
+  FROM ratings r JOIN movies m ON m.id = r.movie_id
+  WHERE COALESCE(m.media_type, 'movie') = 'movie'
+),
+logged AS (
+  SELECT e.user_id, e.movie_id, COUNT(*)::int AS episodes,
+    SUM(COALESCE(e.runtime_minutes, m.episode_run_time, 45))::numeric / 60 AS hours
+  FROM watched_episodes e JOIN movies m ON m.id = e.movie_id
+  GROUP BY e.user_id, e.movie_id
+),
+rated_series AS (
+  SELECT r.user_id, r.movie_id FROM ratings r JOIN movies m ON m.id = r.movie_id WHERE m.media_type = 'tv'
+),
+shows AS (
+  SELECT COALESCE(l.user_id, rs.user_id) AS user_id,
+    COALESCE(l.hours, (COALESCE(m.episode_run_time, 45) * COALESCE(m.number_of_episodes, 1))::numeric / 60) AS hours,
+    COALESCE(l.episodes, 0) AS episodes
+  FROM rated_series rs
+  FULL JOIN logged l ON l.user_id = rs.user_id AND l.movie_id = rs.movie_id
+  JOIN movies m ON m.id = COALESCE(l.movie_id, rs.movie_id)
+),
+people AS (SELECT user_id FROM films UNION SELECT user_id FROM shows)
 SELECT
-  r.user_id,
-  ROUND(COALESCE(SUM(
-    CASE WHEN COALESCE(m.media_type, 'movie') = 'movie'
-      THEN COALESCE(m.runtime_minutes, 0)::numeric / 60 ELSE 0 END
-  ), 0), 1) AS movie_hours,
-  ROUND(COALESCE(SUM(
-    CASE WHEN m.media_type = 'tv'
-      THEN (COALESCE(m.episode_run_time, 45) * COALESCE(m.number_of_episodes, 1))::numeric / 60 ELSE 0 END
-  ), 0), 1) AS series_hours,
-  COUNT(*) FILTER (WHERE COALESCE(m.media_type, 'movie') = 'movie')::integer AS movie_count,
-  COUNT(*) FILTER (WHERE m.media_type = 'tv')::integer AS series_count
-FROM ratings r
-JOIN movies m ON m.id = r.movie_id
-GROUP BY r.user_id;
+  p.user_id,
+  ROUND(COALESCE((SELECT SUM(f.hours) FROM films f WHERE f.user_id = p.user_id), 0), 1) AS movie_hours,
+  ROUND(COALESCE((SELECT SUM(s.hours) FROM shows s WHERE s.user_id = p.user_id), 0), 1) AS series_hours,
+  (SELECT COUNT(*) FROM films f WHERE f.user_id = p.user_id)::integer AS movie_count,
+  (SELECT COUNT(*) FROM shows s WHERE s.user_id = p.user_id)::integer AS series_count,
+  COALESCE((SELECT SUM(s.episodes) FROM shows s WHERE s.user_id = p.user_id), 0)::integer AS episode_count
+FROM people p;
 
 CREATE OR REPLACE FUNCTION get_favorite_genre(p_user_id UUID)
 RETURNS TEXT

@@ -5,6 +5,8 @@ import type { SearchResult } from '../components/MovieSearch'
 import { ensureMovieInDb, fetchMovieDetails } from '../lib/movies'
 import Dialog, { CloseButton } from './Dialog'
 import type { ExistingRating } from '../pages/RateMovie'
+import SeriesTracker from './SeriesTracker'
+import type { SeasonInfo } from '../lib/episodes'
 
 interface MovieDetailProps {
   movie: SearchResult
@@ -38,6 +40,7 @@ interface Details {
   revenue: number | null
   trailer_key: string | null
   cast: CastMember[]
+  seasons?: SeasonInfo[]
 }
 
 const POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w400'
@@ -191,6 +194,10 @@ export default function MovieDetail({ movie, onRate, onClose }: MovieDetailProps
           ) : (
             <>
               {details?.overview && <p className="max-w-prose leading-relaxed text-ink-muted">{details.overview}</p>}
+
+              {movie.media_type === 'tv' && user && status && details?.seasons && details.seasons.length > 0 && (
+                <SeriesTracker series={movie} seasons={details.seasons} movieId={status.movieId} details={details} />
+              )}
 
               {details && details.cast.length > 0 && (
                 <section>

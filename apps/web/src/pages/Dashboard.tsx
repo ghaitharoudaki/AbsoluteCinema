@@ -4,6 +4,7 @@ import { api, errorMessage } from "../lib/api";
 import NavBar from "../components/NavBar";
 import MovieSearch, { type SearchResult } from "../components/MovieSearch";
 import MovieDetail from "../components/MovieDetail";
+import ContinueWatching from "../components/ContinueWatching";
 import RateMovie, { type ExistingRating } from "./RateMovie";
 import Dialog, { CloseButton } from "../components/Dialog";
 
@@ -89,6 +90,7 @@ export default function Dashboard() {
   const [logStep, setLogStep] = useState<"search" | "detail" | "rate" | null>(null);
   const [selectedMovie, setSelectedMovie] = useState<SearchResult | null>(null);
   const [editingRating, setEditingRating] = useState<ExistingRating | null>(null);
+  const [progressKey, setProgressKey] = useState(0);
 
   const displayName = user?.name?.split(" ")[0] || user?.email?.split("@")[0] || "there";
 
@@ -254,6 +256,8 @@ export default function Dashboard() {
     setLogStep(null);
     setSelectedMovie(null);
     setEditingRating(null);
+    // Episodes may have been ticked in the dialog.
+    setProgressKey((key) => key + 1);
   };
 
   const handleLogDone = () => {
@@ -432,6 +436,14 @@ export default function Dashboard() {
             Find a film to log
           </button>
         </section>
+
+        <ContinueWatching
+          refreshKey={progressKey}
+          onOpen={(series) => {
+            setSelectedMovie(series);
+            setLogStep("detail");
+          }}
+        />
 
         <PosterRow
           title="In theaters this week"

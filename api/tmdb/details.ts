@@ -72,6 +72,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       runtime_minutes: null,
       episode_run_time: avgEpisodeRuntime,
       number_of_episodes: data.number_of_episodes ?? null,
+      seasons: (data.seasons || []).map((s: any) => ({
+        season_number: s.season_number,
+        name: s.name || `Season ${s.season_number}`,
+        episode_count: s.episode_count ?? 0,
+      })),
       release_date: data.first_air_date || null,
       budget: null,
       revenue: null,

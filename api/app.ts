@@ -181,7 +181,7 @@ const profileByUsername: Handler = async ({ user, params }) => {
          WHERE w.user_id = $1 ORDER BY w.created_at DESC`,
         [id],
       ),
-      sql`SELECT movie_hours::float8, series_hours::float8, movie_count, series_count FROM user_watch_stats WHERE user_id = ${id}`,
+      sql`SELECT movie_hours::float8, series_hours::float8, movie_count, series_count, episode_count FROM user_watch_stats WHERE user_id = ${id}`,
       sql`SELECT get_favorite_genre(${id}::uuid) AS genre`,
       sql`SELECT COUNT(*)::int AS n FROM follows WHERE following_id = ${id}`,
       sql`SELECT COUNT(*)::int AS n FROM follows WHERE follower_id = ${id}`,
@@ -195,7 +195,7 @@ const profileByUsername: Handler = async ({ user, params }) => {
     top5,
     ratings,
     watchlist: watchlist.map((row) => row.movie),
-    stats: stats[0] ?? { movie_hours: 0, series_hours: 0, movie_count: 0, series_count: 0 },
+    stats: stats[0] ?? { movie_hours: 0, series_hours: 0, movie_count: 0, series_count: 0, episode_count: 0 },
     favoriteGenre: genre[0]?.genre ?? null,
     followers: followers[0].n,
     following: following[0].n,
@@ -219,7 +219,71 @@ const titleStatus: Handler = async ({ user, params, url }) => {
   return { movieId: row?.movie_id ?? null, rating: row?.rating ?? null, onWatchlist: row?.on_watchlist ?? false }
 }
 
+/** Episodes you've ticked off for one series. */
+const watchedEpisodes: Handler = async ({ user, params }) => {
+  const rows = await db()`
+    SELECT season_number AS season, episode_number AS episode FROM watched_episodes
+    WHERE user_id = ${user.id} AND movie_id = ${uuid(params[0], 'series id')}
+    ORDER BY season_number, episode_number`
+  return { episodes: rows }
+}
+
+/** Series you're partway through, most recently watched first. Specials (season 0) don't count. */
+const continueWatching: Handler = async ({ user }) => {
+  const rows = await db().query(
+    `SELECT ${movieJson} AS movie, m.number_of_episodes,
+       COUNT(*)::int AS watched_count,
+       MAX(e.watched_at) AS last_watched_at
+     FROM watched_episodes e JOIN movies m ON m.id = e.movie_id
+     WHERE e.user_id = $1 AND e.season_number > 0
+     GROUP BY m.id
+     HAVING m.number_of_episodes IS NULL OR COUNT(*) < m.number_of_episodes
+     ORDER BY MAX(e.watched_at) DESC
+     LIMIT 12`,
+    [user.id],
+  )
+  return { series: rows }
+}
+
 /* --------------------------------------------------------------- writes */
+
+/** Marks episodes watched or unwatched in bulk (one episode, or a whole season). */
+const setEpisodes: Handler = async ({ user, body }) => {
+  const movieId = uuid(body.movie_id, 'movie_id')
+  const list = Array.isArray(body.episodes) ? body.episodes : null
+  if (!list || list.length === 0 || list.length > 200) throw new HttpError(400, 'episodes must be a list of 1 to 200 episodes')
+  const seasons: number[] = []
+  const numbers: number[] = []
+  const runtimes: Array<number | null> = []
+  for (const item of list as Array<Record<string, unknown>>) {
+    const season = int(item?.season, 'season')
+    const episode = int(item?.episode, 'episode')
+    const runtime = optInt(item?.runtime, 'runtime')
+    if (season < 0 || season > 500 || episode < 1 || episode > 5000) throw new HttpError(400, 'Season or episode number is out of range')
+    seasons.push(season)
+    numbers.push(episode)
+    runtimes.push(runtime !== null && runtime >= 1 && runtime <= 600 ? runtime : null)
+  }
+
+  const sql = db()
+  const series = await sql`SELECT 1 FROM movies WHERE id = ${movieId} AND media_type = 'tv'`
+  if (!series.length) throw new HttpError(400, 'Episodes can only be logged for a series')
+
+  if (body.watched === false) {
+    await sql`
+      DELETE FROM watched_episodes e
+      USING unnest(${seasons}::smallint[], ${numbers}::smallint[]) AS x(season, episode)
+      WHERE e.user_id = ${user.id} AND e.movie_id = ${movieId}
+        AND e.season_number = x.season AND e.episode_number = x.episode`
+    return { watched: false }
+  }
+  await sql`
+    INSERT INTO watched_episodes (user_id, movie_id, season_number, episode_number, runtime_minutes)
+    SELECT ${user.id}::uuid, ${movieId}::uuid, x.season, x.episode, x.runtime
+    FROM unnest(${seasons}::smallint[], ${numbers}::smallint[], ${runtimes}::int[]) AS x(season, episode, runtime)
+    ON CONFLICT DO NOTHING`
+  return { watched: true }
+}
 
 /** Inserts a TMDB title if it's new; fills in missing metadata if it isn't. Returns its id. */
 const ensureMovie: Handler = async ({ body }) => {
@@ -408,6 +472,9 @@ const routes: Array<[method: string, pattern: RegExp, handler: Handler]> = [
   ['PATCH', /^profile$/, updateProfile],
   ['POST', /^movies$/, ensureMovie],
   ['GET', /^titles\/(\d+)\/status$/, titleStatus],
+  ['GET', /^episodes\/([^/]+)$/, watchedEpisodes],
+  ['PUT', /^episodes$/, setEpisodes],
+  ['GET', /^continue-watching$/, continueWatching],
   ['POST', /^ratings$/, saveRating],
   ['DELETE', /^ratings\/([^/]+)$/, deleteRating],
   ['POST', /^watchlist$/, addToWatchlist],

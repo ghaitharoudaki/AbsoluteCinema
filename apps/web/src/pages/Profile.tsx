@@ -23,6 +23,7 @@ interface WatchStats {
   series_hours: number
   movie_count: number
   series_count: number
+  episode_count: number
 }
 
 interface ProfileMovie {
@@ -440,7 +441,11 @@ export default function Profile() {
             else setRatingTarget(selectedMovie)
             setSelectedMovie(null)
           }}
-          onClose={() => setSelectedMovie(null)}
+          onClose={() => {
+            setSelectedMovie(null)
+            // Episodes ticked in the dialog change hours and badges.
+            if (selectedMovie.media_type === 'tv' && isOwnProfile) void loadProfile(false)
+          }}
         />
       )}
 
