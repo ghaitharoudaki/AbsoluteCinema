@@ -305,7 +305,7 @@ const profileByUsername: Handler = async ({ user, params }) => {
     }
   }
 
-  const [top5, ratings, watchlist, stats, genre, followers, following, followCheck, badgeRow] = await sql.transaction(
+  const [top5, ratings, watchlist, stats, genre, followers, following, followCheck, badgeRow, followBack] = await sql.transaction(
     [
       sql`SELECT t.rank, t.movie_id, m.tmdb_id, COALESCE(m.media_type, 'movie') AS media_type, m.title, m.poster_path,
             COALESCE(m.release_year, m.year) AS release_year
@@ -313,7 +313,7 @@ const profileByUsername: Handler = async ({ user, params }) => {
           WHERE t.user_id = ${id} ORDER BY t.rank`,
       sql.query(
         `SELECT r.id, r.rating::float8 AS rating, r.description, to_char(r.watched_date, 'YYYY-MM-DD') AS watched_date,
-           COALESCE(r.date_type, 'unknown') AS date_type, r.is_private, ${movieJson} AS movie
+           COALESCE(r.date_type, 'unknown') AS date_type, r.is_private, r.tier_override, r.tier_rank, ${movieJson} AS movie
          FROM ratings r JOIN movies m ON m.id = r.movie_id
          WHERE r.user_id = $1 AND ($2 OR NOT r.is_private) ORDER BY r.created_at DESC`,
         [id, own],
@@ -329,6 +329,10 @@ const profileByUsername: Handler = async ({ user, params }) => {
       sql`SELECT COUNT(*)::int AS n FROM follows WHERE follower_id = ${id}`,
       sql`SELECT 1 FROM follows WHERE follower_id = ${user.id} AND following_id = ${id}`,
       sql.query(badgeStatsSql, [id]),
+      // Followers this profile hasn't followed back (shown to the owner as a nudge).
+      sql`SELECT COUNT(*)::int AS n FROM follows f
+          WHERE f.following_id = ${id}
+            AND NOT EXISTS (SELECT 1 FROM follows b WHERE b.follower_id = ${id} AND b.following_id = f.follower_id)`,
     ],
     { readOnly: true },
   )
@@ -360,6 +364,7 @@ const profileByUsername: Handler = async ({ user, params }) => {
     following: following[0].n,
     isFollowing: followCheck.length > 0,
     followsYou,
+    toFollowBack: own ? followBack[0].n : 0,
     locked: false,
   }
 }
@@ -652,20 +657,101 @@ const undoDismissRecommendation: Handler = async ({ user, params }) => {
   return { status: 'restored' }
 }
 
+/** Columns for a person row as seen by viewer $1 (People page, follower lists). */
+const peopleColumns = `p.id, p.username, p.display_name, p.avatar_url, p.bio, p.is_private,
+       (SELECT COUNT(*)::int FROM follows WHERE following_id = p.id) AS followers,
+       CASE WHEN ${canSeeProfile('p', '$1')}
+         THEN (SELECT COUNT(*)::int FROM ratings WHERE user_id = p.id AND NOT is_private) END AS rating_count,
+       EXISTS (SELECT 1 FROM follows WHERE follower_id = $1 AND following_id = p.id) AS is_following,
+       EXISTS (SELECT 1 FROM follows WHERE follower_id = p.id AND following_id = $1) AS follows_you`
+
+/**
+ * Who follows a profile, or whom it follows. Visible when the profile is: your own, public, or
+ * private but following you. Newest follows first.
+ */
+const followList: Handler = async ({ user, params }) => {
+  const username = decodeURIComponent(params[0] || '')
+  const list = params[1] === 'following' ? 'following' : 'followers'
+  const sql = db()
+  const found = await sql.query(`SELECT p.id, ${canSeeProfile('p', '$1')} AS visible FROM profiles p WHERE p.username = $2`, [user.id, username])
+  if (!found[0]) throw new HttpError(404, 'Profile not found')
+  if (!found[0].visible) throw new HttpError(403, 'This profile is private', 'private_profile')
+  const join = list === 'followers' ? 'f.follower_id = p.id AND f.following_id = $2' : 'f.following_id = p.id AND f.follower_id = $2'
+  const rows = await sql.query(
+    `SELECT ${peopleColumns}, f.created_at AS followed_at
+     FROM follows f JOIN profiles p ON ${join}
+     ORDER BY f.created_at DESC NULLS LAST, p.username
+     LIMIT 500`,
+    [user.id, found[0].id],
+  )
+  return { people: rows }
+}
+
+/** Your latest logs, for the "Recently watched" shelf in search. Private ones included: it's your own list. */
+const recentLogs: Handler = async ({ user }) => {
+  const rows = await db().query(
+    `SELECT ${movieJson} AS movie, r.rating::float8 AS rating
+     FROM ratings r JOIN movies m ON m.id = r.movie_id
+     WHERE r.user_id = $1
+     ORDER BY COALESCE(r.watched_date::timestamptz, r.created_at) DESC, r.created_at DESC
+     LIMIT 8`,
+    [user.id],
+  )
+  return { items: rows }
+}
+
+const TIER_KEYS = ['S', 'A', 'B', 'C', 'D', 'F'] as const
+
+/**
+ * Saves a dragged tier list: `tiers` maps each tier to rating ids in display order.
+ * Only the signed-in user's own ratings are touched.
+ */
+const saveTiers: Handler = async ({ user, body }) => {
+  const tiers = body.tiers as Record<string, unknown> | undefined
+  if (!tiers || typeof tiers !== 'object') throw new HttpError(400, 'tiers must map S–F to lists of rating ids')
+  const ids: string[] = []
+  const keys: string[] = []
+  const ranks: number[] = []
+  for (const key of TIER_KEYS) {
+    const list = tiers[key] ?? []
+    if (!Array.isArray(list)) throw new HttpError(400, `tiers.${key} must be a list`)
+    list.forEach((id, index) => {
+      ids.push(uuid(id, `tiers.${key}`))
+      keys.push(key)
+      ranks.push(index)
+    })
+  }
+  if (ids.length > 5000) throw new HttpError(400, 'Too many titles in one tier list')
+  if (new Set(ids).size !== ids.length) throw new HttpError(400, 'A title can only sit in one tier')
+  await db().query(
+    `UPDATE ratings r SET tier_override = x.tier, tier_rank = x.rank
+     FROM unnest($2::uuid[], $3::text[], $4::int[]) AS x(id, tier, rank)
+     WHERE r.id = x.id AND r.user_id = $1`,
+    [user.id, ids, keys, ranks],
+  )
+  return { status: 'saved' }
+}
+
+/** Puts one tier list (films or series) back to score bands. */
+const resetTiers: Handler = async ({ user, url }) => {
+  const kind = url.searchParams.get('kind') === 'tv' ? 'tv' : 'movie'
+  await db().query(
+    `UPDATE ratings r SET tier_override = NULL, tier_rank = NULL
+     FROM movies m WHERE m.id = r.movie_id AND r.user_id = $1 AND COALESCE(m.media_type, 'movie') = $2`,
+    [user.id, kind],
+  )
+  return { status: 'reset' }
+}
+
 /** Find people by username or name. Empty query: suggestions, people you don't follow yet first. */
 const searchPeople: Handler = async ({ user, url }) => {
   const q = (url.searchParams.get('q') || '').trim().slice(0, 50)
   const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`)
   const rows = await db().query(
-    `SELECT p.id, p.username, p.display_name, p.avatar_url, p.bio, p.is_private,
-       (SELECT COUNT(*)::int FROM follows WHERE following_id = p.id) AS followers,
-       CASE WHEN ${canSeeProfile('p', '$1')}
-         THEN (SELECT COUNT(*)::int FROM ratings WHERE user_id = p.id AND NOT is_private) END AS rating_count,
-       EXISTS (SELECT 1 FROM follows WHERE follower_id = $1 AND following_id = p.id) AS is_following,
-       EXISTS (SELECT 1 FROM follows WHERE follower_id = p.id AND following_id = $1) AS follows_you
+    `SELECT ${peopleColumns}
      FROM profiles p
      WHERE p.id <> $1 AND ($2 = '' OR p.username ILIKE $3 OR p.display_name ILIKE $3)
-     ORDER BY ($2 <> '' AND p.username ILIKE $4) DESC, is_following ASC, followers DESC, p.username
+     ORDER BY ($2 <> '' AND p.username ILIKE $4) DESC, (follows_you AND NOT is_following) DESC, is_following ASC, followers DESC, p.username
      LIMIT 30`,
     [user.id, q, `%${escaped}%`, `${escaped}%`],
   )
@@ -709,6 +795,10 @@ const routes: Array<[method: string, pattern: RegExp, handler: Handler]> = [
   ['GET', /^social$/, social],
   ['GET', /^recommendations$/, recommendations],
   ['GET', /^people$/, searchPeople],
+  ['GET', /^profiles\/([^/]+)\/(followers|following)$/, followList],
+  ['GET', /^recent-logs$/, recentLogs],
+  ['PUT', /^tiers$/, saveTiers],
+  ['DELETE', /^tiers$/, resetTiers],
   ['GET', /^profiles\/([^/]+)$/, profileByUsername],
   ['PATCH', /^profile$/, updateProfile],
   ['PUT', /^avatar$/, uploadAvatar],

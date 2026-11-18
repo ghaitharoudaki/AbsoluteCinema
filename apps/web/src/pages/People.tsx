@@ -1,23 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, errorMessage } from '../lib/api'
-import { useToast } from '../lib/Toast'
 import { usePageTitle } from '../lib/usePageTitle'
-import Avatar from '../components/Avatar'
-import LockIcon from '../components/LockIcon'
-
-interface Person {
-  id: string
-  username: string
-  display_name: string | null
-  avatar_url: string | null
-  bio: string | null
-  is_private: boolean
-  followers: number
-  rating_count: number | null
-  is_following: boolean
-  follows_you: boolean
-}
+import PersonRow, { useFollowToggle, type Person } from '../components/PersonRow'
 
 export default function People() {
   usePageTitle('People')
@@ -26,9 +11,11 @@ export default function People() {
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const toast = useToast()
   const requestRef = useRef(0)
+  const update = useCallback((id: string, change: (person: Person) => Person) => {
+    setPeople((list) => list.map((p) => (p.id === id ? change(p) : p)))
+  }, [])
+  const { toggle, busy } = useFollowToggle(update)
 
   const needle = query.trim()
 
@@ -49,21 +36,6 @@ export default function People() {
     }, needle ? 250 : 0)
     return () => window.clearTimeout(timer)
   }, [needle, setParams])
-
-  const toggleFollow = async (person: Person) => {
-    const next = !person.is_following
-    setBusy(person.id)
-    setPeople((list) => list.map((p) => (p.id === person.id ? { ...p, is_following: next, followers: p.followers + (next ? 1 : -1) } : p)))
-    try {
-      await api(`follows/${person.id}`, { method: next ? 'PUT' : 'DELETE' })
-      toast(next ? `You’re following ${person.display_name || person.username}` : `Unfollowed ${person.display_name || person.username}`)
-    } catch (err) {
-      setPeople((list) => list.map((p) => (p.id === person.id ? person : p)))
-      toast(errorMessage(err, 'That didn’t save. Try again.'), { tone: 'error' })
-    } finally {
-      setBusy(null)
-    }
-  }
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
@@ -106,47 +78,9 @@ export default function People() {
         </div>
       ) : (
         <ul className={`mt-4 space-y-3 transition-opacity ${loading ? 'opacity-60' : ''}`}>
-          {people.map((person) => {
-            const name = person.display_name || person.username
-            return (
-              <li key={person.id} className="flex items-center gap-4 rounded-2xl border border-line bg-surface p-4">
-                <Link to={`/profile/${person.username}`} className="flex min-w-0 flex-1 items-center gap-4 rounded-xl">
-                  <Avatar url={person.avatar_url} name={name} className="h-12 w-12 text-lg" />
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-1.5 font-semibold">
-                      <span className="truncate">{name}</span>
-                      {person.is_private && (
-                        <span className="text-ink-muted" title="Private profile">
-                          <LockIcon className="h-3.5 w-3.5" />
-                          <span className="sr-only">(private profile)</span>
-                        </span>
-                      )}
-                    </span>
-                    <span className="block truncate text-sm text-ink-muted">
-                      @{person.username}
-                      {person.follows_you && <span className="ml-2 rounded-full bg-raised px-2 py-0.5 text-xs font-semibold text-ink">Follows you</span>}
-                    </span>
-                    <span className="block text-xs text-ink-muted tabular">
-                      {person.followers} {person.followers === 1 ? 'follower' : 'followers'}
-                      {person.rating_count != null ? `, ${person.rating_count} ${person.rating_count === 1 ? 'rating' : 'ratings'}` : ', ratings hidden'}
-                    </span>
-                  </span>
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => void toggleFollow(person)}
-                  disabled={busy === person.id}
-                  aria-pressed={person.is_following}
-                  aria-label={person.is_following ? `Unfollow ${name}` : `Follow ${name}`}
-                  className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold transition-colors disabled:opacity-60 ${
-                    person.is_following ? 'border border-line text-ink hover:border-danger hover:text-danger' : 'bg-brand text-on-brand hover:bg-brand-hover'
-                  }`}
-                >
-                  {person.is_following ? 'Following' : person.follows_you ? 'Follow back' : 'Follow'}
-                </button>
-              </li>
-            )
-          })}
+          {people.map((person) => (
+            <PersonRow key={person.id} person={person} busy={busy === person.id} onToggle={(p) => void toggle(p)} />
+          ))}
         </ul>
       )}
     </div>

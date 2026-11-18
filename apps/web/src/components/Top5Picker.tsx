@@ -14,17 +14,66 @@ export interface Top5Movie {
   release_year: number | null
 }
 
+/** A title the user has logged: offered first when filling a slot. */
+export interface LoggedTitle {
+  movie_id: string
+  tmdb_id: number
+  title: string
+  poster_path: string | null
+  release_year: number | null
+  media_type: string
+  rating: number
+}
+
 interface Top5PickerProps {
   items: Top5Movie[]
   editable: boolean
   onSaved: () => void
+  /** Your logged titles, so a slot can be filled without searching. */
+  library?: LoggedTitle[]
 }
+
+type PickSource = 'logs' | 'search'
 
 const POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w300'
 
-export default function Top5Picker({ items, editable, onSaved }: Top5PickerProps) {
+export default function Top5Picker({ items, editable, onSaved, library = [] }: Top5PickerProps) {
   const [draft, setDraft] = useState<Top5Movie[]>(items)
   const [activeSlot, setActiveSlot] = useState<number | null>(null)
+  const [source, setSource] = useState<PickSource>('logs')
+  const [logQuery, setLogQuery] = useState('')
+
+  const openSlot = (rank: number) => {
+    setSource(library.length > 0 ? 'logs' : 'search')
+    setLogQuery('')
+    setActiveSlot(rank)
+  }
+
+  const placeTitle = async (selectedSlot: number, title: Omit<Top5Movie, 'rank'>) => {
+    const withoutSlot = draft.filter((item) => item.rank !== selectedSlot && item.movie_id !== title.movie_id)
+    const nextDraft = [...withoutSlot, { ...title, rank: selectedSlot }].sort((a, b) => a.rank - b.rank)
+    setDraft(nextDraft)
+    await saveDraft(nextDraft)
+  }
+
+  const pickLogged = async (logged: LoggedTitle) => {
+    if (activeSlot === null) return
+    const slot = activeSlot
+    setActiveSlot(null)
+    await placeTitle(slot, {
+      movie_id: logged.movie_id,
+      tmdb_id: logged.tmdb_id,
+      media_type: logged.media_type,
+      title: logged.title,
+      poster_path: logged.poster_path,
+      release_year: logged.release_year,
+    })
+  }
+
+  const needle = logQuery.trim().toLowerCase()
+  const logChoices = [...library]
+    .filter((title) => !needle || title.title.toLowerCase().includes(needle))
+    .sort((a, b) => b.rating - a.rating || a.title.localeCompare(b.title))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,18 +112,12 @@ export default function Top5Picker({ items, editable, onSaved }: Top5PickerProps
     try {
       setError(null)
       const movieId = await ensureMovieInDb(result, null, false)
-      const next: Top5Movie = {
-        rank: selectedSlot,
+      await placeTitle(selectedSlot, {
         movie_id: movieId,
         title: result.title,
         poster_path: result.poster_path,
         release_year: result.release_year ? parseInt(result.release_year, 10) : null,
-      }
-
-      const withoutSlot = draft.filter((item) => item.rank !== selectedSlot && item.movie_id !== movieId)
-      const nextDraft = [...withoutSlot, next].sort((a, b) => a.rank - b.rank)
-      setDraft(nextDraft)
-      await saveDraft(nextDraft)
+      })
     } catch {
       setError('Could not add that title. Try again.')
     }
@@ -149,7 +192,7 @@ export default function Top5Picker({ items, editable, onSaved }: Top5PickerProps
               ) : editable ? (
                 <button
                   type="button"
-                  onClick={() => setActiveSlot(rank)}
+                  onClick={() => openSlot(rank)}
                   disabled={saving}
                   className="flex aspect-[2/3] w-full flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-line text-ink-muted transition-colors hover:border-brand hover:text-brand"
                 >
@@ -184,7 +227,79 @@ export default function Top5Picker({ items, editable, onSaved }: Top5PickerProps
               <p className="font-display text-2xl font-extrabold">Choose your #{activeSlot}</p>
               <CloseButton onClick={() => setActiveSlot(null)} />
             </div>
-            <MovieSearch onSelect={handleSelect} />
+            {library.length > 0 && (
+              <div role="tablist" aria-label="Where to pick from" className="mb-4 grid grid-cols-2 gap-1 rounded-full bg-raised p-1">
+                {([
+                  ['logs', `Your logs (${library.length})`],
+                  ['search', 'Search all titles'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    aria-selected={source === value}
+                    onClick={() => setSource(value)}
+                    className={`rounded-full px-3 py-2 text-sm font-semibold transition-colors ${source === value ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {source === 'search' || library.length === 0 ? (
+              <MovieSearch onSelect={handleSelect} />
+            ) : (
+              <div>
+                <label htmlFor="top5-log-filter" className="sr-only">Filter your logs</label>
+                <input
+                  id="top5-log-filter"
+                  type="search"
+                  autoFocus
+                  value={logQuery}
+                  onChange={(event) => setLogQuery(event.target.value)}
+                  placeholder="Filter what you’ve logged"
+                  className="w-full rounded-full border border-line bg-raised px-4 py-2.5 text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none"
+                />
+                {logChoices.length === 0 ? (
+                  <p className="mt-3 rounded-xl border border-dashed border-line px-4 py-5 text-center text-sm text-ink-muted">
+                    Nothing you’ve logged matches “{logQuery.trim()}”.{' '}
+                    <button type="button" onClick={() => setSource('search')} className="font-semibold text-brand underline-offset-2 hover:underline">
+                      Search all titles
+                    </button>
+                  </p>
+                ) : (
+                  <ul className="mt-3 max-h-[55vh] overflow-y-auto overscroll-contain rounded-xl border border-line" aria-label="Your logged titles, best rated first">
+                    {logChoices.map((title) => {
+                      const current = draft.find((item) => item.movie_id === title.movie_id)
+                      return (
+                        <li key={title.movie_id} className="border-b border-line last:border-b-0">
+                          <button
+                            type="button"
+                            onClick={() => void pickLogged(title)}
+                            className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-raised focus-visible:bg-raised"
+                          >
+                            {title.poster_path ? (
+                              <img src={`https://image.tmdb.org/t/p/w200${title.poster_path}`} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded-md object-cover" />
+                            ) : (
+                              <span className="flex h-14 w-10 shrink-0 items-center justify-center rounded-md bg-raised text-[10px] text-ink-muted">None</span>
+                            )}
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-semibold">{title.title}</span>
+                              <span className="block text-sm text-ink-muted">
+                                {title.release_year ?? 'Year unknown'}, {title.media_type === 'tv' ? 'series' : 'film'}
+                                {current && <span className="ml-1.5 font-semibold text-ink">· now #{current.rank}</span>}
+                              </span>
+                            </span>
+                            <span className="ticket shrink-0 text-sm">{title.rating.toFixed(1)}</span>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         </Dialog>
       )}

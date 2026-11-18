@@ -136,9 +136,70 @@ h3 {
 .poster {
   transition: transform 220ms cubic-bezier(.2, .8, .2, 1), box-shadow 220ms ease;
 }
-button:hover > .poster,
+/* Hover lift only where there is a real hover; on touch it would stick after a tap */
+@media (hover: hover) {
+  button:hover > .poster {
+    transform: translateY(-4px);
+  }
+}
 button:focus-visible > .poster {
   transform: translateY(-4px);
+}
+
+/* ---------------------------------------------------------------- mobile */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* No double-tap zoom delay on controls */
+a,
+button,
+[role='button'],
+input,
+label,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+/* iOS zooms into any field under 16px on focus; keep fields at 16px on phones */
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Dialogs rise from the bottom on phones */
+.dialog-sheet {
+  animation: dialog-in 180ms cubic-bezier(.2, .8, .2, 1);
+}
+@media (max-width: 639px) {
+  .dialog-sheet {
+    animation: sheet-in 260ms cubic-bezier(.2, .8, .2, 1);
+  }
+}
+@keyframes sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Tier posters: long-press drags instead of opening the system image menu */
+.tier-draggable {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Page headline: the one orchestrated entrance per page */

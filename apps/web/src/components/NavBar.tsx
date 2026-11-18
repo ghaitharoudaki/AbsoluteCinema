@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import { useTheme } from '../lib/ThemeContext'
@@ -21,7 +22,92 @@ export function GitHubIcon({ className = 'h-5 w-5' }: { className?: string }) {
 }
 
 const iconButton =
-  'flex h-9 w-9 items-center justify-center rounded-full text-ink-muted transition-colors hover:bg-raised hover:text-ink'
+  'flex h-10 w-10 items-center justify-center rounded-full text-ink-muted transition-colors hover:bg-raised hover:text-ink md:h-9 md:w-9'
+
+/** Phones: GitHub, theme and sign out live behind one button so the header fits at 320 px. */
+function MoreMenu({ theme, onToggleTheme, onSignOut }: { theme: string; onToggleTheme: () => void; onSignOut: () => void }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuId = useId()
+
+  useEffect(() => {
+    if (!open) return
+    rootRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    const onDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+        buttonRef.current?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const onMenuKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    event.preventDefault()
+    const items = [...(rootRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
+    const index = items.indexOf(document.activeElement as HTMLElement)
+    items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+  }
+
+  const item = 'flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-ink hover:bg-raised focus-visible:bg-raised focus-visible:outline-none'
+
+  return (
+    <div ref={rootRef} className="relative md:hidden">
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="More"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={menuId}
+        onClick={() => setOpen((value) => !value)}
+        className={iconButton}
+      >
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
+          <circle cx="5" cy="12" r="2" />
+          <circle cx="12" cy="12" r="2" />
+          <circle cx="19" cy="12" r="2" />
+        </svg>
+      </button>
+      {open && (
+        <div id={menuId} role="menu" aria-label="More" onKeyDown={onMenuKey} className="toast-in absolute right-0 top-full z-50 mt-2 w-60 overflow-hidden rounded-2xl border border-line bg-surface py-1 shadow-dialog">
+          <a role="menuitem" href={CREATOR_GITHUB} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)} className={item}>
+            <GitHubIcon className="h-5 w-5" />
+            Support the creator
+          </a>
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              onToggleTheme()
+              setOpen(false)
+            }}
+            className={item}
+          >
+            <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center">{theme === 'dark' ? '☀' : '☾'}</span>
+            {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+          </button>
+          <button role="menuitem" type="button" onClick={onSignOut} className={`${item} border-t border-line text-danger`}>
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 17l5-5-5-5M20 12H9M12 21H5a2 2 0 01-2-2V5a2 2 0 012-2h7" />
+            </svg>
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function NavBar() {
   const { user, signOut } = useAuth()
@@ -30,12 +116,16 @@ export default function NavBar() {
   const { openSearch } = useLogFlow()
   const navigate = useNavigate()
   const nextTheme = theme === 'dark' ? 'light' : 'dark'
+  const signOutAndLeave = () => void signOut().then(() => navigate('/login', { replace: true }))
 
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-canvas/85 backdrop-blur-md">
-      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3 sm:gap-3 sm:px-6">
-        <Link to="/" className="mr-auto font-display text-2xl font-black uppercase leading-none">
-          Absolute<span className="text-brand">Cinema</span>
+    <header className="sticky top-0 z-40 border-b border-line bg-canvas/85 pt-[env(safe-area-inset-top)] backdrop-blur-md">
+      <div className="mx-auto flex max-w-6xl items-center gap-1.5 px-4 py-2.5 sm:gap-3 sm:px-6 sm:py-3">
+        <Link to="/" aria-label="AbsoluteCinema home" className="mr-auto flex min-w-0 items-center gap-2 rounded-lg">
+          <img src="/favicon.svg" alt="" width={36} height={36} className="h-8 w-8 shrink-0 sm:h-9 sm:w-9" />
+          <span className="truncate font-display text-xl font-black uppercase leading-none sm:text-2xl" aria-hidden="true">
+            Absolute<span className="text-brand">Cinema</span>
+          </span>
         </Link>
 
         <nav className="hidden items-center gap-1 md:flex" aria-label="Main">
@@ -83,12 +173,12 @@ export default function NavBar() {
           rel="noopener noreferrer"
           aria-label="Support the creator on GitHub (opens in a new tab)"
           title="Support the creator on GitHub"
-          className={iconButton}
+          className={`${iconButton} hidden md:flex`}
         >
           <GitHubIcon className="h-5 w-5" />
         </a>
 
-        <button type="button" onClick={toggle} aria-label={`Switch to ${nextTheme} theme`} title={`Switch to ${nextTheme} theme`} className={iconButton}>
+        <button type="button" onClick={toggle} aria-label={`Switch to ${nextTheme} theme`} title={`Switch to ${nextTheme} theme`} className={`${iconButton} hidden md:flex`}>
           {theme === 'dark' ? (
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
               <circle cx="12" cy="12" r="4" />
@@ -113,11 +203,13 @@ export default function NavBar() {
           </NavLink>
         )}
 
-        <button type="button" onClick={() => void signOut().then(() => navigate('/login', { replace: true }))} aria-label="Sign out" title="Sign out" className={iconButton}>
+        <button type="button" onClick={signOutAndLeave} aria-label="Sign out" title="Sign out" className={`${iconButton} hidden md:flex`}>
           <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 17l5-5-5-5M20 12H9M12 21H5a2 2 0 01-2-2V5a2 2 0 012-2h7" />
           </svg>
         </button>
+
+        <MoreMenu theme={theme} onToggleTheme={toggle} onSignOut={signOutAndLeave} />
       </div>
     </header>
   )

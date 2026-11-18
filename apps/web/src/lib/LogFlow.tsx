@@ -92,7 +92,7 @@ export function LogFlowProvider({ children }: { children: ReactNode }) {
               <p className="font-display text-2xl font-extrabold">Find a film to log</p>
               <CloseButton onClick={close} />
             </div>
-            <MovieSearch onSelect={openTitle} />
+            <MovieSearch onSelect={openTitle} showRecents />
           </div>
         </Dialog>
       )}

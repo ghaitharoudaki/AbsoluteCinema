@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
+import { api } from '../lib/api'
+import { addRecent, loadRecent, saveRecent } from '../lib/recentSearches'
 
 export interface SearchResult {
   tmdb_id: number
@@ -10,14 +12,69 @@ export interface SearchResult {
 
 interface MovieSearchProps {
   onSelect: (result: SearchResult) => void
+  /** Before typing, show "Recently searched" (this device) and "Recently watched" (your logs). */
+  showRecents?: boolean
+}
+
+interface RecentLog {
+  movie: { tmdb_id: number; title: string; poster_path: string | null; release_year: number | null; media_type: string }
+  rating: number
 }
 
 type Filter = 'all' | 'movie' | 'tv'
 
+/** A small scrolling row of posters for the empty search panel. */
+function RecentShelf({ title, items, onPick, action }: { title: string; items: SearchResult[]; onPick: (item: SearchResult) => void; action?: React.ReactNode }) {
+  const id = `recent-${title.toLowerCase().replace(/\s+/g, '-')}`
+  return (
+    <section aria-labelledby={id}>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 id={id} className="text-xs font-semibold text-ink-muted">{title}</h3>
+        {action}
+      </div>
+      <ul className="rail -mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
+        {items.map((item) => (
+          <li key={`${item.media_type}-${item.tmdb_id}`} className="w-16 shrink-0">
+            <button type="button" onClick={() => onPick(item)} className="block w-full rounded-lg text-left" aria-label={`${item.title}${item.release_year ? ` (${item.release_year})` : ''}`}>
+              <span className="poster block aspect-[2/3] overflow-hidden rounded-lg bg-raised">
+                {item.poster_path ? (
+                  <img src={`${POSTER_BASE_URL}${item.poster_path}`} alt="" loading="lazy" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="flex h-full items-center justify-center p-1 text-center text-[9px] text-ink-muted">{item.title}</span>
+                )}
+              </span>
+              <span className="mt-1 block truncate text-[11px] font-medium" aria-hidden="true">{item.title}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 const POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w200'
 
-export default function MovieSearch({ onSelect }: MovieSearchProps) {
+export default function MovieSearch({ onSelect, showRecents = false }: MovieSearchProps) {
   const [query, setQuery] = useState('')
+  const [recentSearched, setRecentSearched] = useState<SearchResult[]>(() => (showRecents ? loadRecent() : []))
+  const [recentWatched, setRecentWatched] = useState<SearchResult[] | null>(showRecents ? null : [])
+
+  useEffect(() => {
+    if (!showRecents) return
+    api<{ items: RecentLog[] }>('recent-logs')
+      .then(({ items }) =>
+        setRecentWatched(
+          items.map(({ movie }) => ({
+            tmdb_id: movie.tmdb_id,
+            title: movie.title,
+            poster_path: movie.poster_path,
+            release_year: movie.release_year ? String(movie.release_year) : null,
+            media_type: movie.media_type === 'tv' ? 'tv' : 'movie',
+          })),
+        ),
+      )
+      .catch(() => setRecentWatched([]))
+  }, [showRecents])
   const [results, setResults] = useState<SearchResult[]>([])
   const [filter, setFilter] = useState<Filter>('all')
   const [loading, setLoading] = useState(false)
@@ -67,6 +124,11 @@ export default function MovieSearch({ onSelect }: MovieSearchProps) {
   }, [query])
 
   const handleSelect = (result: SearchResult) => {
+    if (showRecents) {
+      const next = addRecent(recentSearched, result)
+      setRecentSearched(next)
+      saveRecent(next)
+    }
     onSelect(result)
     setQuery('')
     setResults([])
@@ -156,8 +218,42 @@ export default function MovieSearch({ onSelect }: MovieSearchProps) {
         </p>
       )}
 
-      {query.trim().length < 2 && (
+      {query.trim().length < 2 && !showRecents && (
         <p className="mt-3 text-sm text-ink-muted">Type at least 2 letters to search.</p>
+      )}
+
+      {query.trim().length < 2 && showRecents && (
+        <div className="mt-4 space-y-5">
+          {recentSearched.length > 0 && (
+            <RecentShelf
+              title="Recently searched"
+              items={recentSearched}
+              onPick={handleSelect}
+              action={
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecentSearched([])
+                    saveRecent([])
+                  }}
+                  className="rounded-full px-2.5 py-1 text-xs font-semibold text-ink-muted hover:bg-raised hover:text-ink"
+                >
+                  Clear
+                </button>
+              }
+            />
+          )}
+          {recentWatched === null ? (
+            <div className="flex gap-3 overflow-hidden" aria-hidden="true">
+              {Array.from({ length: 5 }, (_, i) => <div key={i} className="skeleton aspect-[2/3] w-16 shrink-0 rounded-lg" />)}
+            </div>
+          ) : recentWatched.length > 0 ? (
+            <RecentShelf title="Recently watched" items={recentWatched} onPick={handleSelect} />
+          ) : null}
+          {recentSearched.length === 0 && recentWatched?.length === 0 && (
+            <p className="text-sm text-ink-muted">Type at least 2 letters to search films and series.</p>
+          )}
+        </div>
       )}
     </div>
   )

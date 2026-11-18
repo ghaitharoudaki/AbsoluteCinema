@@ -126,7 +126,7 @@ export default function MovieDetail({ movie, onRate, onClose }: MovieDetailProps
 
   return (
     <Dialog onClose={onClose} title={movie.title} size="lg">
-      <div className="max-h-[78vh] overflow-y-auto">
+      <div className="sm:max-h-[78vh] sm:overflow-y-auto">
         <div className="relative">
           {movie.poster_path && (
             <div
@@ -164,7 +164,7 @@ export default function MovieDetail({ movie, onRate, onClose }: MovieDetailProps
                 </p>
               )}
 
-              {!loading && details && details.genres.length > 0 && (
+              {!loading && details && (details.genres?.length ?? 0) > 0 && (
                 <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Genres">
                   {details.genres.map((g) => (
                     <li key={g} className="rounded-full bg-raised px-2.5 py-0.5 text-xs font-medium text-ink-muted">
@@ -199,7 +199,7 @@ export default function MovieDetail({ movie, onRate, onClose }: MovieDetailProps
                 <SeriesTracker series={movie} seasons={details.seasons} movieId={status.movieId} details={details} />
               )}
 
-              {details && details.cast.length > 0 && (
+              {details && (details.cast?.length ?? 0) > 0 && (
                 <section>
                   <h3 className="mb-3 text-sm font-bold">Cast</h3>
                   <ul className="rail -mx-6 flex gap-4 overflow-x-auto px-6 pb-1">

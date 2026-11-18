@@ -11,6 +11,7 @@ import MovieDetail from '../components/MovieDetail'
 import TierList from '../components/TierList'
 import BadgeIcons, { type Badge } from '../components/BadgeIcons'
 import LockIcon from '../components/LockIcon'
+import FollowListDialog from '../components/FollowListDialog'
 import RatingHistogram from '../components/RatingHistogram'
 import RateMovie from './RateMovie'
 import Dialog, { CloseButton } from '../components/Dialog'
@@ -48,6 +49,8 @@ interface ProfileResponse {
   badges: Badge[]
   episodesThisMonth: number
   followsYou: boolean
+  /** Own profile only: followers you haven't followed back. */
+  toFollowBack?: number
   /** Private profile the viewer can't see: only name, photo, bio and counts come back. */
   locked: boolean
 }
@@ -68,6 +71,8 @@ export default function Profile() {
   const [profileForm, setProfileForm] = useState({ display_name: '', username: '', bio: '', is_private: false })
   const [locked, setLocked] = useState(false)
   const [followsYou, setFollowsYou] = useState(false)
+  const [toFollowBack, setToFollowBack] = useState(0)
+  const [followList, setFollowList] = useState<'followers' | 'following' | null>(null)
   const [stats, setStats] = useState<WatchStats | null>(null)
   const [favoriteGenre, setFavoriteGenre] = useState<string | null>(null)
   const [followers, setFollowers] = useState(0)
@@ -111,6 +116,7 @@ export default function Profile() {
     })
     setLocked(data.locked ?? false)
     setFollowsYou(data.followsYou ?? false)
+    setToFollowBack(data.toFollowBack ?? 0)
 
     setTop5(data.top5)
     setRatings(data.ratings)
@@ -279,12 +285,27 @@ export default function Profile() {
               <BadgeIcons badges={badges} isOwnProfile={isOwnProfile} />
 
               <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3 text-sm">
-                <span>
+                <button
+                  type="button"
+                  onClick={() => !locked && setFollowList('followers')}
+                  disabled={locked}
+                  className="relative -mx-2 rounded-full px-2 py-1.5 transition-colors enabled:hover:bg-raised disabled:cursor-default"
+                >
                   <span className="font-bold tabular">{followers}</span> <span className="text-ink-muted">{followers === 1 ? 'follower' : 'followers'}</span>
-                </span>
-                <span>
+                  {toFollowBack > 0 && (
+                    <span className="ml-1.5 rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-on-brand tabular">
+                      {toFollowBack} to follow back
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => !locked && setFollowList('following')}
+                  disabled={locked}
+                  className="-mx-2 rounded-full px-2 py-1.5 transition-colors enabled:hover:bg-raised disabled:cursor-default"
+                >
                   <span className="font-bold tabular">{following}</span> <span className="text-ink-muted">following</span>
-                </span>
+                </button>
 
                 {!isOwnProfile && user && (
                   <button
@@ -359,7 +380,24 @@ export default function Profile() {
             </div>
             {isOwnProfile && <span className="shrink-0 text-sm text-ink-muted tabular">{top5.length} of 5 picked</span>}
           </div>
-          <Top5Picker items={top5} editable={isOwnProfile} onSaved={() => void loadProfile(false)} />
+          <Top5Picker
+            items={top5}
+            editable={isOwnProfile}
+            onSaved={() => void loadProfile(false)}
+            library={
+              isOwnProfile
+                ? ratings.map((r) => ({
+                    movie_id: r.movie.id,
+                    tmdb_id: r.movie.tmdb_id,
+                    title: r.movie.title,
+                    poster_path: r.movie.poster_path,
+                    release_year: r.movie.release_year,
+                    media_type: r.movie.media_type,
+                    rating: Number(r.rating),
+                  }))
+                : []
+            }
+          />
         </section>
 
         <div className="mt-14">
@@ -402,12 +440,14 @@ export default function Profile() {
         <section className="mt-14" aria-labelledby="tiers-title">
           <h2 id="tiers-title" className={sectionTitle}>Tier lists</h2>
           <p className="mt-1 text-sm text-ink-muted">
-            {isOwnProfile ? 'Films and series ranked separately, best first. Select a poster to change or remove its rating.' : `${name}'s films and series, ranked from S to F.`}
+            {isOwnProfile ? 'Films and series ranked separately. Arrange them however you like.' : `${name}'s films and series, ranked from S to F.`}
           </p>
           <TierList
             ratings={ratings}
             onSelect={(rating) => (isOwnProfile ? setEditingRating(rating) : setSelectedMovie(toSearchResult(rating.movie)))}
             selectLabel={isOwnProfile ? '. Change rating' : undefined}
+            editable={isOwnProfile}
+            onChanged={() => void loadProfile(false)}
             emptyText={(kind) => {
               const noun = kind === 'tv' ? 'series' : 'films'
               return isOwnProfile ? `No ${noun} rated yet. Rate one and it lands in its tier here.` : `${name} hasn’t rated any ${noun} yet.`
@@ -417,6 +457,19 @@ export default function Profile() {
         </>
         )}
       </div>
+
+      {followList && (
+        <FollowListDialog
+          username={profile.username}
+          name={name}
+          initial={followList}
+          counts={{ followers, following }}
+          isOwnProfile={isOwnProfile}
+          myId={user?.id}
+          onClose={() => setFollowList(null)}
+          onFollowChange={() => void loadProfile(false)}
+        />
+      )}
 
       {editingProfile && (
         <Dialog onClose={() => setEditingProfile(false)} title="Edit profile">

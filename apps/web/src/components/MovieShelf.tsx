@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import LockIcon from './LockIcon'
+import type { TierKey } from '../lib/tiers'
 
 export interface ProfileMovie {
   id: string
@@ -21,6 +22,8 @@ export interface ProfileRating {
   watched_date: string | null
   date_type: 'exact' | 'release' | 'unknown'
   is_private?: boolean
+  tier_override?: TierKey | null
+  tier_rank?: number | null
 }
 
 interface MovieShelfProps {

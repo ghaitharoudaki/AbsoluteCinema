@@ -65,6 +65,13 @@ CREATE INDEX IF NOT EXISTS idx_ratings_created_at ON ratings(created_at DESC);
 ALTER TABLE ratings ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT false;
 
+-- Tier list placement. NULL = the band the score earns; set when the user drags a poster.
+ALTER TABLE ratings ADD COLUMN IF NOT EXISTS tier_override VARCHAR(1);
+ALTER TABLE ratings ADD COLUMN IF NOT EXISTS tier_rank INTEGER;
+DO $$ BEGIN
+  ALTER TABLE ratings ADD CONSTRAINT ratings_tier_override_check CHECK (tier_override IN ('S', 'A', 'B', 'C', 'D', 'F'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 CREATE TABLE IF NOT EXISTS follows (
   follower_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   following_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
