@@ -4,6 +4,8 @@ import NavBar from '../components/NavBar'
 import Top5Picker, { type Top5Movie } from '../components/Top5Picker'
 import MovieDetail from '../components/MovieDetail'
 import TierList from '../components/TierList'
+import BadgeStrip, { type Badge } from '../components/BadgeStrip'
+import RatingHistogram from '../components/RatingHistogram'
 import RateMovie from './RateMovie'
 import Dialog, { CloseButton } from '../components/Dialog'
 import type { SearchResult } from '../components/MovieSearch'
@@ -55,6 +57,8 @@ interface ProfileResponse {
   followers: number
   following: number
   isFollowing: boolean
+  badges: Badge[]
+  episodesThisMonth: number
 }
 
 export default function Profile() {
@@ -76,6 +80,8 @@ export default function Profile() {
   const [followers, setFollowers] = useState(0)
   const [following, setFollowing] = useState(0)
   const [isFollowing, setIsFollowing] = useState(false)
+  const [badges, setBadges] = useState<Badge[]>([])
+  const [episodesThisMonth, setEpisodesThisMonth] = useState(0)
   const [followLoading, setFollowLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [profileSaving, setProfileSaving] = useState(false)
@@ -118,6 +124,8 @@ export default function Profile() {
     setFollowers(data.followers)
     setFollowing(data.following)
     setIsFollowing(data.isFollowing)
+    setBadges(data.badges ?? [])
+    setEpisodesThisMonth(data.episodesThisMonth ?? 0)
 
     setLoading(false)
   }, [username])
@@ -303,22 +311,27 @@ export default function Profile() {
 
         <section className="mt-4" aria-labelledby="stats-title">
           <h2 id="stats-title" className="sr-only">Watch stats</h2>
-          <dl className="grid grid-cols-2 overflow-hidden rounded-2xl border border-line bg-surface sm:grid-cols-3 lg:grid-cols-6">
+          <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-line bg-line sm:grid-cols-3">
             {[
               { label: 'Hours watched', value: `${totalHours.toFixed(0)}h` },
               { label: 'Film hours', value: `${(stats?.movie_hours ?? 0).toFixed(0)}h` },
               { label: 'Series hours', value: `${(stats?.series_hours ?? 0).toFixed(0)}h` },
               { label: 'Titles logged', value: totalLogged },
               { label: 'Films / series', value: `${stats?.movie_count ?? 0} / ${stats?.series_count ?? 0}` },
+              { label: 'Episodes watched', value: stats?.episode_count ?? 0 },
+              { label: 'Episodes this month', value: episodesThisMonth },
+              { label: 'Average rating', value: ratings.length ? (ratings.reduce((sum, r) => sum + Number(r.rating), 0) / ratings.length).toFixed(1) : '–' },
               { label: 'Top genre', value: favoriteGenre ?? '–' },
             ].map((stat) => (
-              <div key={stat.label} className="border-b border-r border-line px-5 py-4 [&:nth-child(2n)]:border-r-0 sm:[&:nth-child(2n)]:border-r sm:[&:nth-child(3n)]:border-r-0 lg:border-b-0 lg:[&:nth-child(3n)]:border-r lg:last:border-r-0">
+              <div key={stat.label} className="bg-surface px-5 py-4">
                 <dt className="text-xs text-ink-muted">{stat.label}</dt>
                 <dd className="mt-1 truncate font-display text-3xl font-extrabold tabular">{stat.value}</dd>
               </div>
             ))}
           </dl>
         </section>
+
+        <BadgeStrip badges={badges} isOwnProfile={isOwnProfile} name={name} />
 
         <section className="mt-14" aria-labelledby="top5-title">
           <div className="mb-8 flex items-end justify-between gap-4">
@@ -341,6 +354,7 @@ export default function Profile() {
           onMovieClick={(movie) => setSelectedMovie(toSearchResult(movie))}
           onEditRating={isOwnProfile ? setEditingRating : undefined}
           ratings={ratings}
+          filterable
         />
 
         <MovieShelf
@@ -352,6 +366,8 @@ export default function Profile() {
           ratings={ratings}
           onRemoveMovie={isOwnProfile ? removeFromWatchlist : undefined}
         />
+
+        <RatingHistogram scores={ratings.map((rating) => Number(rating.rating))} name={isOwnProfile ? 'You' : name} />
 
         <section className="mt-14" aria-labelledby="tiers-title">
           <h2 id="tiers-title" className={sectionTitle}>Tier lists</h2>
@@ -485,6 +501,7 @@ function MovieShelf({
   onEditRating,
   ratings,
   onRemoveMovie,
+  filterable = false,
 }: {
   title: string
   subtitle: string
@@ -494,9 +511,31 @@ function MovieShelf({
   onEditRating?: (rating: ProfileRating) => void
   ratings: ProfileRating[]
   onRemoveMovie?: (movieId: string) => void
+  /** Adds type chips, sort and search above the shelf. */
+  filterable?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
-  const visibleMovies = expanded ? movies : movies.slice(0, 12)
+  const [kind, setKind] = useState<'all' | 'movie' | 'tv'>('all')
+  const [sort, setSort] = useState<'recent' | 'high' | 'low' | 'title'>('recent')
+  const [query, setQuery] = useState('')
+
+  const needle = query.trim().toLowerCase()
+  const filtered = filterable
+    ? movies
+        .filter((movie) => kind === 'all' || (movie.media_type === 'tv' ? 'tv' : 'movie') === kind)
+        .filter((movie) => !needle || movie.title.toLowerCase().includes(needle))
+    : movies
+  const ordered =
+    sort === 'recent' ? filtered
+    : [...filtered].sort((a, b) =>
+        sort === 'title' ? a.title.localeCompare(b.title)
+        : sort === 'high' ? (b.rating ?? 0) - (a.rating ?? 0) || a.title.localeCompare(b.title)
+        : (a.rating ?? 0) - (b.rating ?? 0) || a.title.localeCompare(b.title),
+      )
+  const narrowed = filterable && (kind !== 'all' || needle !== '')
+  // Searching or filtering shows every match as a grid, no "show all" step.
+  const showGrid = expanded || narrowed
+  const visibleMovies = showGrid ? ordered : ordered.slice(0, 12)
   const headingId = `shelf-${title.toLowerCase().replace(/\s+/g, '-')}`
 
   return (
@@ -508,7 +547,7 @@ function MovieShelf({
           </h2>
           <p className="mt-1 text-sm text-ink-muted">{subtitle}</p>
         </div>
-        {movies.length > 12 && (
+        {!narrowed && movies.length > 12 && (
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
@@ -520,12 +559,60 @@ function MovieShelf({
         )}
       </div>
 
-      {movies.length > 0 ? (
-        <ul className={expanded ? 'grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-6' : 'rail -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6'}>
+      {filterable && movies.length > 0 && (
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <div className="inline-flex gap-1 rounded-full bg-raised p-1" role="group" aria-label="Show">
+            {([['all', 'All'], ['movie', 'Films'], ['tv', 'Series']] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={kind === value}
+                onClick={() => setKind(value)}
+                className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${kind === value ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="sr-only" htmlFor={`${headingId}-sort`}>Sort by</label>
+          <select
+            id={`${headingId}-sort`}
+            value={sort}
+            onChange={(event) => setSort(event.target.value as typeof sort)}
+            className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm font-medium text-ink focus:border-brand focus:outline-none"
+          >
+            <option value="recent">Newest first</option>
+            <option value="high">Highest rated</option>
+            <option value="low">Lowest rated</option>
+            <option value="title">Title A–Z</option>
+          </select>
+          <label className="sr-only" htmlFor={`${headingId}-search`}>Search {title.toLowerCase()}</label>
+          <input
+            id={`${headingId}-search`}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search titles"
+            className="min-w-0 flex-1 rounded-full border border-line bg-surface px-4 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none sm:max-w-xs"
+          />
+          {narrowed && (
+            <span className="text-sm text-ink-muted tabular" role="status">
+              {ordered.length} of {movies.length}
+            </span>
+          )}
+        </div>
+      )}
+
+      {movies.length > 0 && ordered.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-line px-6 py-8 text-sm text-ink-muted">
+          Nothing matches. Try a different word or switch back to All.
+        </div>
+      ) : movies.length > 0 ? (
+        <ul className={showGrid ? 'grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-6' : 'rail -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6'}>
           {visibleMovies.map((movie) => {
             const rating = onEditRating ? ratings.find((item) => item.movie.id === movie.id) : undefined
             return (
-              <li key={movie.id} className={expanded ? 'min-w-0' : 'w-[128px] shrink-0 sm:w-[144px]'}>
+              <li key={movie.id} className={showGrid ? 'min-w-0' : 'w-[128px] shrink-0 sm:w-[144px]'}>
                 <button type="button" onClick={() => onMovieClick(movie)} className="group block w-full rounded-xl text-left">
                   <span className="relative block aspect-[2/3] overflow-hidden rounded-xl bg-raised shadow-poster transition-transform duration-200 group-hover:-translate-y-1">
                     {movie.poster_path ? (

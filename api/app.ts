@@ -1,5 +1,6 @@
 import { db, pgErrorCode } from './_lib/db.js'
 import { getSessionUser, type SessionUser } from './_lib/auth.js'
+import { computeBadges } from './_lib/badges.js'
 
 /*
  * Data API for the web app. Every /api/app/* path is rewritten here (vercel.json)
@@ -155,6 +156,32 @@ const recommendationSeeds: Handler = async ({ user }) => {
   return { seeds: [...topRated, ...top5], dismissed: dismissed.map((row) => row.tmdb_id) }
 }
 
+/** Everything computeBadges needs for one profile ($1), in one round trip. "A day" is a UTC day. */
+const badgeStatsSql = `
+  WITH totals AS (SELECT user_id, movie_hours + series_hours AS hours FROM user_watch_stats)
+  SELECT
+    COALESCE((SELECT hours FROM totals WHERE user_id = $1), 0)::float8 AS total_hours,
+    COALESCE((SELECT MAX(hours) FROM totals), 0)::float8 AS top_hours,
+    COALESCE((SELECT MAX(n) FROM (
+      SELECT COUNT(*) AS n FROM watched_episodes WHERE user_id = $1
+      GROUP BY movie_id, (watched_at AT TIME ZONE 'UTC')::date) d), 0)::int AS max_episodes_in_day,
+    (SELECT COUNT(*) FROM (
+      SELECT e.movie_id FROM watched_episodes e JOIN movies m ON m.id = e.movie_id
+      WHERE e.user_id = $1 AND e.season_number > 0
+      GROUP BY e.movie_id, m.number_of_episodes
+      HAVING m.number_of_episodes > 0 AND COUNT(*) >= m.number_of_episodes) c)::int AS completed_series,
+    (SELECT COUNT(*) FROM ratings WHERE user_id = $1)::int AS rating_count,
+    (SELECT AVG(rating) FROM ratings WHERE user_id = $1)::float8 AS avg_rating,
+    (SELECT COUNT(DISTINCT g.name) FROM ratings r JOIN movies m ON m.id = r.movie_id
+       CROSS JOIN LATERAL unnest(m.genres) AS g(name) WHERE r.user_id = $1)::int AS genre_count,
+    (SELECT COUNT(DISTINCT COALESCE(m.release_year, m.year) / 10) FROM ratings r JOIN movies m ON m.id = r.movie_id
+       WHERE r.user_id = $1 AND COALESCE(m.media_type, 'movie') = 'movie'
+         AND COALESCE(m.release_year, m.year) IS NOT NULL)::int AS decade_count,
+    (SELECT COUNT(*) FROM ratings WHERE user_id = $1 AND description IS NOT NULL
+       AND description NOT LIKE 'Imported from %')::int AS notes_count,
+    (SELECT COUNT(*) FROM watched_episodes WHERE user_id = $1
+       AND watched_at >= date_trunc('month', NOW()))::int AS episodes_this_month`
+
 const profileByUsername: Handler = async ({ user, params }) => {
   const username = decodeURIComponent(params[0] || '')
   const sql = db()
@@ -163,7 +190,7 @@ const profileByUsername: Handler = async ({ user, params }) => {
   if (!profile) throw new HttpError(404, 'Profile not found')
   const id = profile.id as string
 
-  const [top5, ratings, watchlist, stats, genre, followers, following, followCheck] = await sql.transaction(
+  const [top5, ratings, watchlist, stats, genre, followers, following, followCheck, badgeRow] = await sql.transaction(
     [
       sql`SELECT t.rank, t.movie_id, m.tmdb_id, COALESCE(m.media_type, 'movie') AS media_type, m.title, m.poster_path,
             COALESCE(m.release_year, m.year) AS release_year
@@ -186,11 +213,28 @@ const profileByUsername: Handler = async ({ user, params }) => {
       sql`SELECT COUNT(*)::int AS n FROM follows WHERE following_id = ${id}`,
       sql`SELECT COUNT(*)::int AS n FROM follows WHERE follower_id = ${id}`,
       sql`SELECT 1 FROM follows WHERE follower_id = ${user.id} AND following_id = ${id}`,
+      sql.query(badgeStatsSql, [id]),
     ],
     { readOnly: true },
   )
 
+  const b = badgeRow[0]
+  const badges = computeBadges({
+    totalHours: b.total_hours,
+    topHours: b.top_hours,
+    maxEpisodesInDay: b.max_episodes_in_day,
+    completedSeries: b.completed_series,
+    ratingCount: b.rating_count,
+    avgRating: b.avg_rating,
+    genreCount: b.genre_count,
+    decadeCount: b.decade_count,
+    notesCount: b.notes_count,
+    followers: followers[0].n,
+  })
+
   return {
+    badges,
+    episodesThisMonth: b.episodes_this_month,
     profile,
     top5,
     ratings,
