@@ -1,6 +1,7 @@
 import { db, pgErrorCode } from './_lib/db.js'
 import { getSessionUser, type SessionUser } from './_lib/auth.js'
 import { computeBadges } from './_lib/badges.js'
+import { parseAvatarDataUrl } from './_lib/avatar.js'
 
 /*
  * Data API for the web app. Every /api/app/* path is rewritten here (vercel.json)
@@ -456,8 +457,12 @@ const updateProfile: Handler = async ({ user, body }) => {
   if (!username || !/^[A-Za-z0-9_]{3,50}$/.test(username)) {
     throw new HttpError(400, 'Username must be 3–50 letters, numbers or underscores')
   }
+  // Photos are uploaded through PUT /avatar; the key is only honoured when sent.
+  const touchesAvatar = 'avatar_url' in body
   const avatarUrl = optText(body.avatar_url, 'avatar_url', 500)
-  if (avatarUrl && !/^https?:\/\//i.test(avatarUrl)) throw new HttpError(400, 'Profile photo link must start with http:// or https://')
+  if (avatarUrl && !/^https?:\/\//i.test(avatarUrl) && !avatarUrl.startsWith(`/api/app/avatars/${user.id}`)) {
+    throw new HttpError(400, 'Profile photo link must start with http:// or https://')
+  }
 
   try {
     const rows = await db()`
@@ -465,7 +470,7 @@ const updateProfile: Handler = async ({ user, body }) => {
         display_name = ${optText(body.display_name, 'display_name', 100)},
         username = ${username},
         bio = ${optText(body.bio, 'bio', 1000)},
-        avatar_url = ${avatarUrl},
+        avatar_url = CASE WHEN ${touchesAvatar} THEN ${avatarUrl} ELSE avatar_url END,
         updated_at = NOW()
       WHERE id = ${user.id}
       RETURNING id, username, display_name, avatar_url, bio`
@@ -474,6 +479,48 @@ const updateProfile: Handler = async ({ user, body }) => {
     if (pgErrorCode(error) === '23505') throw new HttpError(409, 'That username is taken. Try another one.', 'username_taken')
     throw error
   }
+}
+
+const uploadAvatar: Handler = async ({ user, body }) => {
+  let parsed: ReturnType<typeof parseAvatarDataUrl>
+  try {
+    parsed = parseAvatarDataUrl(String(body.image ?? ''))
+  } catch (error) {
+    throw new HttpError(400, (error as Error).message, 'invalid_photo')
+  }
+  const url = `/api/app/avatars/${user.id}?v=${Date.now()}`
+  const sql = db()
+  const [, rows] = await sql.transaction([
+    sql`INSERT INTO avatars (user_id, mime, data_b64) VALUES (${user.id}, ${parsed.mime}, ${parsed.base64})
+        ON CONFLICT (user_id) DO UPDATE SET mime = EXCLUDED.mime, data_b64 = EXCLUDED.data_b64, updated_at = NOW()`,
+    sql`UPDATE profiles SET avatar_url = ${url}, updated_at = NOW() WHERE id = ${user.id}
+        RETURNING id, username, display_name, avatar_url, bio`,
+  ])
+  return { profile: rows[0] }
+}
+
+const removeAvatar: Handler = async ({ user }) => {
+  const sql = db()
+  const [, rows] = await sql.transaction([
+    sql`DELETE FROM avatars WHERE user_id = ${user.id}`,
+    sql`UPDATE profiles SET avatar_url = NULL, updated_at = NOW() WHERE id = ${user.id}
+        RETURNING id, username, display_name, avatar_url, bio`,
+  ])
+  return { profile: rows[0] }
+}
+
+const avatarImage: Handler = async ({ params }) => {
+  const rows = await db()`SELECT mime, data_b64 FROM avatars WHERE user_id = ${uuid(params[0], 'profile id')}`
+  if (!rows[0]) throw new HttpError(404, 'No photo')
+  // URLs carry ?v=<ms>, so a new upload gets a new URL and this copy can be cached for good.
+  return new Response(Buffer.from(rows[0].data_b64, 'base64'), {
+    headers: { 'Content-Type': rows[0].mime, 'Cache-Control': 'private, max-age=31536000, immutable' },
+  })
+}
+
+const undoDismissRecommendation: Handler = async ({ user, params }) => {
+  await db()`DELETE FROM recommendation_feedback WHERE user_id = ${user.id} AND tmdb_id = ${int(params[0], 'tmdb_id')}`
+  return { status: 'restored' }
 }
 
 const follow: Handler = async ({ user, params }) => {
@@ -514,6 +561,10 @@ const routes: Array<[method: string, pattern: RegExp, handler: Handler]> = [
   ['GET', /^recommendation-seeds$/, recommendationSeeds],
   ['GET', /^profiles\/([^/]+)$/, profileByUsername],
   ['PATCH', /^profile$/, updateProfile],
+  ['PUT', /^avatar$/, uploadAvatar],
+  ['DELETE', /^avatar$/, removeAvatar],
+  ['GET', /^avatars\/([^/]+)$/, avatarImage],
+  ['DELETE', /^recommendation-feedback\/(\d+)$/, undoDismissRecommendation],
   ['POST', /^movies$/, ensureMovie],
   ['GET', /^titles\/(\d+)\/status$/, titleStatus],
   ['GET', /^episodes\/([^/]+)$/, watchedEpisodes],
@@ -565,7 +616,8 @@ async function handle(request: Request): Promise<Response> {
     }
 
     const params = path.match(route[1])!.slice(1)
-    return json(200, await route[2]({ user, url, params, body }))
+    const result = await route[2]({ user, url, params, body })
+    return result instanceof Response ? result : json(200, result)
   } catch (error) {
     if (error instanceof HttpError) return json(error.status, { error: error.message, code: error.code })
     const code = pgErrorCode(error)

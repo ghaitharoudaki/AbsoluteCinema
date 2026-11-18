@@ -111,6 +111,15 @@ CREATE TABLE IF NOT EXISTS recommendation_feedback (
   PRIMARY KEY (user_id, tmdb_id)
 );
 
+-- Uploaded profile photos: already cropped/resized in the browser (512 px, ~50 KB).
+-- profiles.avatar_url points at /api/app/avatars/<id>?v=<ms> when a row exists here.
+CREATE TABLE IF NOT EXISTS avatars (
+  user_id UUID PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL CHECK (mime IN ('image/webp', 'image/jpeg', 'image/png')),
+  data_b64 TEXT NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Not used by the app yet; kept so existing rows survive the move.
 CREATE TABLE IF NOT EXISTS predictions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

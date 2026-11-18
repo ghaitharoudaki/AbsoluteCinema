@@ -119,12 +119,52 @@ h3 {
 .rail {
   scroll-snap-type: x proximity;
   scrollbar-width: none;
+  /* Snap to the padded edge so the first poster lines up with the heading */
+  scroll-padding-inline: 1rem;
+}
+@media (min-width: 640px) {
+  .rail { scroll-padding-inline: 1.5rem; }
 }
 .rail::-webkit-scrollbar {
   display: none;
 }
 .rail > * {
   scroll-snap-align: start;
+}
+
+/* Posters lift toward the light when pointed at */
+.poster {
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1), box-shadow 220ms ease;
+}
+button:hover > .poster,
+button:focus-visible > .poster {
+  transform: translateY(-4px);
+}
+
+/* Page headline: the one orchestrated entrance per page */
+.hero-in {
+  animation: hero-in 420ms cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes hero-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.toast-in {
+  animation: toast-in 220ms cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Watchlist "Pick for me": the chosen poster settles like a projector focusing */
+.spotlight-in {
+  animation: spotlight-in 480ms cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes spotlight-in {
+  0% { filter: blur(6px) brightness(1.6); transform: scale(1.06); }
+  100% { filter: none; transform: none; }
 }
 
 :focus-visible {

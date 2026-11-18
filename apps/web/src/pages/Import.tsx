@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import NavBar from '../components/NavBar'
+import { usePageTitle } from '../lib/usePageTitle'
 import { useAuth } from '../lib/AuthContext'
 import { api, ApiError } from '../lib/api'
 import { ensureMovieInDb } from '../lib/movies'
@@ -114,6 +114,7 @@ async function findMovie(name: string, year: number | null): Promise<SearchResul
 }
 
 export default function Import() {
+  usePageTitle('Import')
   const { user } = useAuth()
   const [profileUsername, setProfileUsername] = useState<string | null>(null)
   const [rows, setRows] = useState<ImportRow[]>([])
@@ -215,9 +216,7 @@ export default function Import() {
   const unmatchedCount = rows.filter((row) => row.matchState === 'unmatched').length
 
   return (
-    <div className="min-h-screen bg-canvas text-ink">
-      <NavBar />
-      <main className="mx-auto max-w-5xl px-4 py-12 sm:px-6">
+    <div className="mx-auto max-w-5xl px-4 py-12 sm:px-6">
         <div className="max-w-2xl">
           <h1 className="font-display text-[clamp(3rem,8vw,5rem)] font-black uppercase leading-[0.85]">Import your history</h1>
           <p className="mt-4 leading-7 text-ink-muted">
@@ -309,7 +308,6 @@ export default function Import() {
 
         {summary && <p role="status" className="mt-6 rounded-xl bg-success/10 p-4 text-sm font-medium text-success">Imported {summary.ratings} ratings and {summary.watchlist} watchlist titles. {summary.skipped} were skipped because they were already logged or had no match.</p>}
         {error && <p role="alert" className="mt-6 rounded-xl bg-danger/10 p-4 text-sm text-danger">{error}</p>}
-      </main>
     </div>
   )
 }

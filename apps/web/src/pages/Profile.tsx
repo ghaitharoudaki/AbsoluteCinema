@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import NavBar from '../components/NavBar'
 import Top5Picker, { type Top5Movie } from '../components/Top5Picker'
+import Avatar from '../components/Avatar'
+import AvatarPicker from '../components/AvatarPicker'
+import MovieShelf, { type ProfileMovie, type ProfileRating } from '../components/MovieShelf'
+import { useMe } from '../lib/MeContext'
+import { useToast } from '../lib/Toast'
+import { usePageTitle } from '../lib/usePageTitle'
 import MovieDetail from '../components/MovieDetail'
 import TierList from '../components/TierList'
 import BadgeStrip, { type Badge } from '../components/BadgeStrip'
@@ -26,25 +31,6 @@ interface WatchStats {
   movie_count: number
   series_count: number
   episode_count: number
-}
-
-interface ProfileMovie {
-  id: string
-  tmdb_id: number
-  title: string
-  poster_path: string | null
-  release_year: number | null
-  media_type: string
-  rating?: number
-}
-
-interface ProfileRating {
-  id: string
-  movie: ProfileMovie
-  rating: number
-  description: string | null
-  watched_date: string | null
-  date_type: 'exact' | 'release' | 'unknown'
 }
 
 interface ProfileResponse {
@@ -74,7 +60,7 @@ export default function Profile() {
   const [ratingTarget, setRatingTarget] = useState<SearchResult | null>(null)
   const [editingRating, setEditingRating] = useState<ProfileRating | null>(null)
   const [editingProfile, setEditingProfile] = useState(false)
-  const [profileForm, setProfileForm] = useState({ display_name: '', username: '', bio: '', avatar_url: '' })
+  const [profileForm, setProfileForm] = useState({ display_name: '', username: '', bio: '' })
   const [stats, setStats] = useState<WatchStats | null>(null)
   const [favoriteGenre, setFavoriteGenre] = useState<string | null>(null)
   const [followers, setFollowers] = useState(0)
@@ -87,8 +73,11 @@ export default function Profile() {
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileError, setProfileError] = useState<string | null>(null)
   const navigate = useNavigate()
+  const { setMe } = useMe()
+  const toast = useToast()
 
   const isOwnProfile = !!user && profile?.id === user.id
+  usePageTitle(profile ? profile.display_name || profile.username : username ?? 'Profile')
 
   const loadProfile = useCallback(async (showLoading = true) => {
     if (!username) return
@@ -111,7 +100,6 @@ export default function Profile() {
       display_name: profileData.display_name ?? '',
       username: profileData.username,
       bio: profileData.bio ?? '',
-      avatar_url: profileData.avatar_url ?? '',
     })
 
     setTop5(data.top5)
@@ -166,11 +154,12 @@ export default function Profile() {
           display_name: profileForm.display_name,
           username: profileForm.username,
           bio: profileForm.bio,
-          avatar_url: profileForm.avatar_url,
         },
       })
       setProfile(saved)
+      setMe(saved)
       setEditingProfile(false)
+      toast('Profile saved')
       if (saved.username !== username) navigate(`/profile/${saved.username}`, { replace: true })
     } catch (error) {
       setProfileError(errorMessage(error, "Your profile didn't save. Try again."))
@@ -179,21 +168,10 @@ export default function Profile() {
     }
   }
 
-  const removeFromWatchlist = async (movieId: string) => {
-    if (!user || !isOwnProfile) return
-    try {
-      await api(`watchlist/${movieId}`, { method: 'DELETE' })
-      setWatchlist((movies) => movies.filter((movie) => movie.id !== movieId))
-    } catch (error) {
-      console.error('Watchlist removal failed:', error)
-    }
-  }
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-canvas text-ink">
-        <NavBar />
-        <main className="mx-auto max-w-5xl px-4 py-10 sm:px-6" aria-busy="true" aria-label="Loading profile">
+      <div>
+        <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6" aria-busy="true" aria-label="Loading profile">
           <div className="flex items-center gap-6">
             <div className="skeleton h-24 w-24 rounded-full" />
             <div className="space-y-3">
@@ -206,22 +184,21 @@ export default function Profile() {
               <div key={i} className="skeleton aspect-[2/3] rounded-xl" />
             ))}
           </div>
-        </main>
+        </div>
       </div>
     )
   }
 
   if (!profile) {
     return (
-      <div className="min-h-screen bg-canvas text-ink">
-        <NavBar />
-        <main className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center gap-3 px-6 text-center">
+      <div>
+        <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center gap-3 px-6 text-center">
           <h1 className="font-display text-4xl font-extrabold">Profile not found</h1>
           <p className="text-ink-muted">There's no one called @{username}. Check the spelling, or find them through a rating on the home page.</p>
           <Link to="/" className="mt-3 rounded-full bg-brand px-5 py-2.5 text-sm font-bold text-on-brand hover:bg-brand-hover">
             Go to home
           </Link>
-        </main>
+        </div>
       </div>
     )
   }
@@ -241,10 +218,8 @@ export default function Profile() {
     'mt-1.5 w-full rounded-xl border border-line bg-raised px-3.5 py-2.5 text-sm font-normal text-ink focus:border-brand focus:outline-none'
 
   return (
-    <div className="min-h-screen bg-canvas text-ink">
-      <NavBar />
-
-      <main className="mx-auto max-w-5xl px-4 pb-16 sm:px-6">
+    <div>
+      <div className="mx-auto max-w-5xl px-4 pb-16 sm:px-6">
         <section className="relative -mx-4 overflow-hidden px-4 pb-8 pt-12 sm:-mx-6 sm:px-6">
           {top5[0]?.poster_path && (
             <div
@@ -260,12 +235,20 @@ export default function Profile() {
           />
 
           <div className="relative flex flex-col gap-6 sm:flex-row sm:items-end">
-            {profile.avatar_url ? (
-              <img src={profile.avatar_url} alt="" className="h-28 w-28 shrink-0 rounded-full object-cover ring-4 ring-canvas" />
+            {isOwnProfile ? (
+              <button
+                type="button"
+                onClick={() => setEditingProfile(true)}
+                aria-label="Change profile photo"
+                className="group relative h-28 w-28 shrink-0 rounded-full"
+              >
+                <Avatar url={profile.avatar_url} name={name} className="h-28 w-28 text-5xl ring-4 ring-canvas" />
+                <span className="absolute inset-0 flex items-center justify-center rounded-full bg-[rgb(var(--shadow)/0.55)] text-xs font-bold text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                  Change photo
+                </span>
+              </button>
             ) : (
-              <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-full bg-raised font-display text-5xl font-black text-ink-muted ring-4 ring-canvas">
-                {name.charAt(0).toUpperCase()}
-              </div>
+              <Avatar url={profile.avatar_url} name={name} className="h-28 w-28 text-5xl ring-4 ring-canvas" />
             )}
 
             <div className="min-w-0 flex-1">
@@ -346,26 +329,40 @@ export default function Profile() {
           <Top5Picker items={top5} editable={isOwnProfile} onSaved={() => void loadProfile(false)} />
         </section>
 
-        <MovieShelf
-          title="Watched"
-          subtitle={isOwnProfile ? 'Everything you’ve logged, newest first.' : `Everything ${name} has logged, newest first.`}
-          movies={recentMovies}
-          emptyText={isOwnProfile ? 'Nothing logged yet. Use Log a film on the home page to add your first.' : `${name} hasn’t logged anything yet.`}
-          onMovieClick={(movie) => setSelectedMovie(toSearchResult(movie))}
-          onEditRating={isOwnProfile ? setEditingRating : undefined}
-          ratings={ratings}
-          filterable
-        />
+        <div className="mt-14">
+          <MovieShelf
+            title={isOwnProfile ? 'Recently watched' : 'Watched'}
+            subtitle={isOwnProfile ? 'Your latest logs. Filters, diary and watchlist live in your library.' : `Everything ${name} has logged, newest first.`}
+            movies={recentMovies}
+            emptyState={
+              <div className="rounded-2xl border border-dashed border-line px-6 py-8 text-sm text-ink-muted">
+                {isOwnProfile ? 'Nothing logged yet. Use Log a film to add your first.' : `${name} hasn’t logged anything yet.`}
+              </div>
+            }
+            onMovieClick={(movie) => setSelectedMovie(toSearchResult(movie))}
+            onEditRating={isOwnProfile ? setEditingRating : undefined}
+            ratings={ratings}
+            filterable={!isOwnProfile}
+          />
+          {isOwnProfile && recentMovies.length > 0 && (
+            <Link to="/library" className="mt-4 inline-block text-sm font-semibold text-brand underline-offset-4 hover:underline">
+              Open your library
+            </Link>
+          )}
+        </div>
 
-        <MovieShelf
-          title="Watchlist"
-          subtitle="Saved for a future movie night."
-          movies={watchlist}
-          emptyText={isOwnProfile ? 'Your watchlist is empty. Open any film and choose Add to watchlist.' : 'Nothing on the watchlist yet.'}
-          onMovieClick={(movie) => setSelectedMovie(toSearchResult(movie))}
-          ratings={ratings}
-          onRemoveMovie={isOwnProfile ? removeFromWatchlist : undefined}
-        />
+        {!isOwnProfile && watchlist.length > 0 && (
+          <div className="mt-14">
+            <MovieShelf
+              title="Watchlist"
+              subtitle={`What ${name} wants to watch next.`}
+              movies={watchlist}
+              emptyState={null}
+              onMovieClick={(movie) => setSelectedMovie(toSearchResult(movie))}
+              ratings={ratings}
+            />
+          </div>
+        )}
 
         <RatingHistogram scores={ratings.map((rating) => Number(rating.rating))} name={isOwnProfile ? 'You' : name} />
 
@@ -384,7 +381,7 @@ export default function Profile() {
             }}
           />
         </section>
-      </main>
+      </div>
 
       {editingProfile && (
         <Dialog onClose={() => setEditingProfile(false)} title="Edit profile">
@@ -399,10 +396,18 @@ export default function Profile() {
               <CloseButton onClick={() => setEditingProfile(false)} label="Cancel editing" />
             </div>
             <div className="space-y-4 p-6">
+              <AvatarPicker
+                url={profile.avatar_url}
+                name={name}
+                onSaved={(saved, message) => {
+                  setProfile(saved)
+                  setMe(saved)
+                  toast(message)
+                }}
+              />
               {([
                 ['display_name', 'Display name', 'Shown at the top of your profile'],
                 ['username', 'Username', 'Letters, numbers and underscores. Changes your profile link.'],
-                ['avatar_url', 'Profile photo link', 'Paste an image URL, or leave empty for your initial'],
               ] as const).map(([key, label, hint]) => (
                 <label key={key} className="block text-sm font-semibold">
                   {label}
@@ -488,170 +493,5 @@ export default function Profile() {
         />
       )}
     </div>
-  )
-}
-
-/** Poster shelf: a scrolling rail that expands into a grid. Module-level so its state survives parent re-renders. */
-function MovieShelf({
-  title,
-  subtitle,
-  movies,
-  emptyText,
-  onMovieClick,
-  onEditRating,
-  ratings,
-  onRemoveMovie,
-  filterable = false,
-}: {
-  title: string
-  subtitle: string
-  movies: ProfileMovie[]
-  emptyText: string
-  onMovieClick: (movie: ProfileMovie) => void
-  onEditRating?: (rating: ProfileRating) => void
-  ratings: ProfileRating[]
-  onRemoveMovie?: (movieId: string) => void
-  /** Adds type chips, sort and search above the shelf. */
-  filterable?: boolean
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const [kind, setKind] = useState<'all' | 'movie' | 'tv'>('all')
-  const [sort, setSort] = useState<'recent' | 'high' | 'low' | 'title'>('recent')
-  const [query, setQuery] = useState('')
-
-  const needle = query.trim().toLowerCase()
-  const filtered = filterable
-    ? movies
-        .filter((movie) => kind === 'all' || (movie.media_type === 'tv' ? 'tv' : 'movie') === kind)
-        .filter((movie) => !needle || movie.title.toLowerCase().includes(needle))
-    : movies
-  const ordered =
-    sort === 'recent' ? filtered
-    : [...filtered].sort((a, b) =>
-        sort === 'title' ? a.title.localeCompare(b.title)
-        : sort === 'high' ? (b.rating ?? 0) - (a.rating ?? 0) || a.title.localeCompare(b.title)
-        : (a.rating ?? 0) - (b.rating ?? 0) || a.title.localeCompare(b.title),
-      )
-  const narrowed = filterable && (kind !== 'all' || needle !== '')
-  // Searching or filtering shows every match as a grid, no "show all" step.
-  const showGrid = expanded || narrowed
-  const visibleMovies = showGrid ? ordered : ordered.slice(0, 12)
-  const headingId = `shelf-${title.toLowerCase().replace(/\s+/g, '-')}`
-
-  return (
-    <section className="mt-14" aria-labelledby={headingId}>
-      <div className="mb-5 flex items-end justify-between gap-4">
-        <div>
-          <h2 id={headingId} className="font-display text-3xl font-extrabold">
-            {title} {movies.length > 0 && <span className="text-ink-muted tabular">{movies.length}</span>}
-          </h2>
-          <p className="mt-1 text-sm text-ink-muted">{subtitle}</p>
-        </div>
-        {!narrowed && movies.length > 12 && (
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            aria-expanded={expanded}
-            className="shrink-0 rounded-full border border-line px-4 py-2 text-sm font-semibold text-ink-muted transition-colors hover:border-ink-muted hover:text-ink"
-          >
-            {expanded ? 'Show fewer' : `Show all ${movies.length}`}
-          </button>
-        )}
-      </div>
-
-      {filterable && movies.length > 0 && (
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <div className="inline-flex gap-1 rounded-full bg-raised p-1" role="group" aria-label="Show">
-            {([['all', 'All'], ['movie', 'Films'], ['tv', 'Series']] as const).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={kind === value}
-                onClick={() => setKind(value)}
-                className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${kind === value ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink'}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <label className="sr-only" htmlFor={`${headingId}-sort`}>Sort by</label>
-          <select
-            id={`${headingId}-sort`}
-            value={sort}
-            onChange={(event) => setSort(event.target.value as typeof sort)}
-            className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm font-medium text-ink focus:border-brand focus:outline-none"
-          >
-            <option value="recent">Newest first</option>
-            <option value="high">Highest rated</option>
-            <option value="low">Lowest rated</option>
-            <option value="title">Title A–Z</option>
-          </select>
-          <label className="sr-only" htmlFor={`${headingId}-search`}>Search {title.toLowerCase()}</label>
-          <input
-            id={`${headingId}-search`}
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search titles"
-            className="min-w-0 flex-1 rounded-full border border-line bg-surface px-4 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none sm:max-w-xs"
-          />
-          {narrowed && (
-            <span className="text-sm text-ink-muted tabular" role="status">
-              {ordered.length} of {movies.length}
-            </span>
-          )}
-        </div>
-      )}
-
-      {movies.length > 0 && ordered.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-line px-6 py-8 text-sm text-ink-muted">
-          Nothing matches. Try a different word or switch back to All.
-        </div>
-      ) : movies.length > 0 ? (
-        <ul className={showGrid ? 'grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-6' : 'rail -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6'}>
-          {visibleMovies.map((movie) => {
-            const rating = onEditRating ? ratings.find((item) => item.movie.id === movie.id) : undefined
-            return (
-              <li key={movie.id} className={showGrid ? 'min-w-0' : 'w-[128px] shrink-0 sm:w-[144px]'}>
-                <button type="button" onClick={() => onMovieClick(movie)} className="group block w-full rounded-xl text-left">
-                  <span className="relative block aspect-[2/3] overflow-hidden rounded-xl bg-raised shadow-poster transition-transform duration-200 group-hover:-translate-y-1">
-                    {movie.poster_path ? (
-                      <img src={`https://image.tmdb.org/t/p/w300${movie.poster_path}`} alt="" loading="lazy" className="h-full w-full object-cover" />
-                    ) : (
-                      <span className="flex h-full items-center justify-center p-3 text-center font-display text-lg font-bold text-ink-muted">{movie.title}</span>
-                    )}
-                    {movie.rating !== undefined && <span className="ticket absolute left-2 top-2 text-base">{movie.rating.toFixed(1)}</span>}
-                  </span>
-                  <span className="mt-2.5 block truncate text-sm font-semibold">{movie.title}</span>
-                  <span className="block text-xs text-ink-muted">{movie.release_year ?? 'Year unknown'}</span>
-                </button>
-                {onRemoveMovie && (
-                  <button
-                    type="button"
-                    onClick={() => onRemoveMovie(movie.id)}
-                    aria-label={`Remove ${movie.title} from watchlist`}
-                    className="mt-1 text-xs font-medium text-ink-muted hover:text-danger"
-                  >
-                    Remove
-                  </button>
-                )}
-                {rating && onEditRating && (
-                  <button
-                    type="button"
-                    onClick={() => onEditRating(rating)}
-                    aria-label={`Change your rating of ${movie.title}`}
-                    className="mt-1 text-xs font-medium text-ink-muted hover:text-brand"
-                  >
-                    Change rating
-                  </button>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      ) : (
-        <div className="rounded-2xl border border-dashed border-line px-6 py-8 text-sm text-ink-muted">{emptyText}</div>
-      )}
-    </section>
   )
 }
