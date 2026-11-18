@@ -211,8 +211,9 @@ export default function Home() {
         </div>
       )}
 
-      <section className="grid gap-10 lg:grid-cols-[1.6fr_1fr]">
-        <div>
+      {/* minmax(0, …) stops long titles/reviews from widening the column past the screen */}
+      <section className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <div className="min-w-0">
           <h2 className="font-display text-3xl font-extrabold">From the group</h2>
           <p className="mt-1 text-sm text-ink-muted">The latest ratings. React, or reply to start a thread.</p>
 
@@ -245,7 +246,7 @@ export default function Home() {
           </ol>
         </div>
 
-        <aside className="space-y-10 lg:sticky lg:top-24 lg:self-start">
+        <aside className="min-w-0 space-y-10 lg:sticky lg:top-24 lg:self-start">
           <section aria-labelledby="favorite-title">
             <h2 id="favorite-title" className="font-display text-3xl font-extrabold">Group favorite</h2>
             <p className="mt-1 text-sm text-ink-muted">The best-rated title across everyone’s logs.</p>
