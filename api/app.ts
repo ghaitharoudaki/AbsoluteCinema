@@ -2,6 +2,7 @@ import { db, pgErrorCode } from './_lib/db.js'
 import { getSessionUser, type SessionUser } from './_lib/auth.js'
 import { computeBadges } from './_lib/badges.js'
 import { parseAvatarDataUrl } from './_lib/avatar.js'
+import { mulberry32, rankCandidates, sampleSeeds, type Seed, type TmdbItem } from './_lib/recommend.js'
 
 /*
  * Data API for the web app. Every /api/app/* path is rewritten here (vercel.json)
@@ -70,10 +71,21 @@ const movieJson = `json_build_object(
   'id', m.id, 'tmdb_id', m.tmdb_id, 'title', m.title, 'poster_path', m.poster_path,
   'release_year', COALESCE(m.release_year, m.year), 'media_type', COALESCE(m.media_type, 'movie'))`
 
+/**
+ * SQL test: may the viewer (placeholder `viewer`, e.g. '$1') see what profile alias `p` shares?
+ * Yes for their own profile, any public profile, or a private one whose owner follows the viewer.
+ */
+const canSeeProfile = (p: string, viewer: string) =>
+  `(${p}.id = ${viewer} OR NOT ${p}.is_private OR EXISTS (SELECT 1 FROM follows vf WHERE vf.follower_id = ${p}.id AND vf.following_id = ${viewer}))`
+
+/** A rating `r` by profile `p` is visible: it's yours, or it's not a private log and the profile is visible. */
+const canSeeRating = (r: string, p: string, viewer: string) =>
+  `(${r}.user_id = ${viewer} OR (NOT ${r}.is_private AND ${canSeeProfile(p, viewer)}))`
+
 /* ---------------------------------------------------------------- reads */
 
 const me: Handler = async ({ user }) => {
-  const rows = await db()`SELECT id, username, display_name, avatar_url, bio FROM profiles WHERE id = ${user.id}`
+  const rows = await db()`SELECT id, username, display_name, avatar_url, bio, is_private FROM profiles WHERE id = ${user.id}`
   if (!rows[0]) throw new HttpError(404, 'Profile not found')
   return { profile: rows[0], email: user.email }
 }
@@ -99,26 +111,29 @@ async function socialFor(ratingIds: string[]) {
 
 const home: Handler = async ({ user }) => {
   const sql = db()
+  const visible = canSeeRating('r', 'p', '$1')
   const scored = `SELECT m.id, m.tmdb_id, m.title, COALESCE(m.release_year, m.year) AS release_year, m.poster_path,
       COALESCE(m.media_type, 'movie') AS media_type,
       ROUND(AVG(r.rating), 1)::float8 AS avg_score, COUNT(r.id)::int AS rating_count
-    FROM movies m JOIN ratings r ON r.movie_id = m.id
+    FROM movies m JOIN ratings r ON r.movie_id = m.id JOIN profiles p ON p.id = r.user_id
+    WHERE ${visible}
     GROUP BY m.id
     ORDER BY AVG(r.rating) DESC, COUNT(r.id) DESC, m.title`
-  const [featuredRow, recentRatings, recentMovies, myRated] = await sql.transaction(
+  const [featuredRow, recentRatings, myRated] = await sql.transaction(
     [
-      sql.query(`${scored} LIMIT 8`),
+      sql.query(`${scored} LIMIT 8`, [user.id]),
       sql.query(
-        `SELECT r.id, r.movie_id, r.user_id, r.rating::float8 AS rating, r.description, r.created_at,
+        `SELECT r.id, r.movie_id, r.user_id, r.rating::float8 AS rating, r.description, r.created_at, r.is_private,
            ${movieJson} AS movie,
            json_build_object('username', p.username, 'avatar_url', p.avatar_url) AS profile
          FROM ratings r
          JOIN movies m ON m.id = r.movie_id
          JOIN profiles p ON p.id = r.user_id
+         WHERE ${visible}
          ORDER BY r.created_at DESC
          LIMIT 20`,
+        [user.id],
       ),
-      sql`SELECT tmdb_id FROM movies ORDER BY created_at DESC LIMIT 12`,
       sql`SELECT m.tmdb_id FROM ratings r JOIN movies m ON m.id = r.movie_id WHERE r.user_id = ${user.id}`,
     ],
     { readOnly: true },
@@ -128,33 +143,100 @@ const home: Handler = async ({ user }) => {
     featured: featuredRow[0] ?? null,
     featuredRow,
     recentRatings,
-    recentMovieTmdbIds: recentMovies.map((row) => row.tmdb_id),
     myRatedTmdbIds: myRated.map((row) => row.tmdb_id),
     ...social,
   }
 }
 
-const social: Handler = async ({ url }) => {
+const social: Handler = async ({ user, url }) => {
   const ids = (url.searchParams.get('rating_ids') || '').split(',').filter(Boolean)
   if (ids.length > 100) throw new HttpError(400, 'Too many ratings requested')
-  return socialFor(ids.map((id) => uuid(id, 'rating_ids')))
+  const requested = ids.map((id) => uuid(id, 'rating_ids'))
+  const allowed = await db().query(
+    `SELECT r.id FROM ratings r JOIN profiles p ON p.id = r.user_id WHERE r.id = ANY($2::uuid[]) AND ${canSeeRating('r', 'p', '$1')}`,
+    [user.id, requested],
+  )
+  return socialFor(allowed.map((row) => row.id as string))
 }
 
-const recommendationSeeds: Handler = async ({ user }) => {
+const TMDB = 'https://api.themoviedb.org/3'
+
+async function tmdbList(path: string, apiKey: string): Promise<TmdbItem[]> {
+  try {
+    const sep = path.includes('?') ? '&' : '?'
+    const res = await fetch(`${TMDB}${path}${sep}api_key=${apiKey}`, { signal: AbortSignal.timeout(6000) })
+    if (!res.ok) return []
+    const data = (await res.json()) as { results?: TmdbItem[] }
+    return data.results ?? []
+  } catch {
+    return []
+  }
+}
+
+type TrendingItem = TmdbItem & { media_type?: string }
+
+/**
+ * Picked for you. `shuffle` picks a different handful of favourites each time, so
+ * "Show other picks" brings a genuinely different row. One failed TMDB call never sinks the row.
+ */
+const recommendations: Handler = async ({ user, url }) => {
+  const apiKey = process.env.TMDB_API_KEY
+  if (!apiKey) throw new HttpError(503, 'The movie database isn’t connected right now')
+  const shuffle = Math.abs(Math.trunc(Number(url.searchParams.get('shuffle')) || 0))
   const sql = db()
-  const [topRated, top5, dismissed] = await sql.transaction(
+  const [rated, top5, seen, dismissed] = await sql.transaction(
     [
-      sql`SELECT m.tmdb_id, COALESCE(m.media_type, 'movie') AS media_type
+      sql`SELECT m.tmdb_id, COALESCE(m.media_type, 'movie') AS media_type, m.title, r.rating::float8 AS weight
           FROM ratings r JOIN movies m ON m.id = r.movie_id
-          WHERE r.user_id = ${user.id} ORDER BY r.rating DESC, r.created_at DESC LIMIT 5`,
-      sql`SELECT m.tmdb_id, COALESCE(m.media_type, 'movie') AS media_type
+          WHERE r.user_id = ${user.id} AND m.tmdb_id IS NOT NULL
+          ORDER BY r.rating DESC, r.created_at DESC LIMIT 40`,
+      sql`SELECT m.tmdb_id, COALESCE(m.media_type, 'movie') AS media_type, m.title, 11::float8 AS weight
           FROM top5_items t JOIN movies m ON m.id = t.movie_id
-          WHERE t.user_id = ${user.id} ORDER BY t.rank LIMIT 5`,
+          WHERE t.user_id = ${user.id} AND m.tmdb_id IS NOT NULL`,
+      sql`SELECT COALESCE(m.media_type, 'movie') || ':' || m.tmdb_id AS k FROM ratings r JOIN movies m ON m.id = r.movie_id WHERE r.user_id = ${user.id}
+          UNION
+          SELECT COALESCE(m.media_type, 'movie') || ':' || m.tmdb_id FROM watchlist w JOIN movies m ON m.id = w.movie_id WHERE w.user_id = ${user.id}`,
       sql`SELECT tmdb_id FROM recommendation_feedback WHERE user_id = ${user.id}`,
     ],
     { readOnly: true },
   )
-  return { seeds: [...topRated, ...top5], dismissed: dismissed.map((row) => row.tmdb_id) }
+
+  const exclude = new Set<string>(seen.map((row) => row.k as string))
+  dismissed.forEach((row) => {
+    exclude.add(`movie:${row.tmdb_id}`)
+    exclude.add(`tv:${row.tmdb_id}`)
+  })
+
+  // Favourites: what they rated 7 or higher; if that's thin, their best ten whatever the score.
+  const liked = rated.filter((row) => row.weight >= 7)
+  const pool = [...top5, ...(liked.length >= 3 ? liked : rated.slice(0, 10))] as Seed[]
+
+  if (pool.length === 0) {
+    const trending = (await tmdbList('/trending/all/week', apiKey)) as TrendingItem[]
+    const picks = trending
+      .filter((item) => item.poster_path && (item.media_type === 'movie' || item.media_type === 'tv'))
+      .filter((item) => !exclude.has(`${item.media_type}:${item.id}`))
+      .slice(0, 24)
+      .map((item) => ({
+        tmdb_id: item.id,
+        media_type: item.media_type as 'movie' | 'tv',
+        title: item.title || item.name || 'Untitled',
+        poster_path: item.poster_path,
+        release_year: (item.release_date || item.first_air_date || '').slice(0, 4) || null,
+        because: 'Trending this week',
+      }))
+    return { picks, cold: true }
+  }
+
+  const seeds = sampleSeeds(pool, 6, mulberry32(shuffle * 7919 + 17))
+  const lists = await Promise.all(
+    seeds.map(async (seed) => {
+      let results = await tmdbList(`/${seed.media_type}/${seed.tmdb_id}/recommendations`, apiKey)
+      if (results.length === 0) results = await tmdbList(`/${seed.media_type}/${seed.tmdb_id}/similar`, apiKey)
+      return { seed, results }
+    }),
+  )
+  return { picks: rankCandidates(lists, exclude, 24), cold: false }
 }
 
 /** Everything computeBadges needs for one profile ($1), in one round trip. "A day" is a UTC day. */
@@ -186,10 +268,42 @@ const badgeStatsSql = `
 const profileByUsername: Handler = async ({ user, params }) => {
   const username = decodeURIComponent(params[0] || '')
   const sql = db()
-  const found = await sql`SELECT id, username, display_name, avatar_url, bio FROM profiles WHERE username = ${username}`
-  const profile = found[0]
-  if (!profile) throw new HttpError(404, 'Profile not found')
+  const found = await sql`
+    SELECT id, username, display_name, avatar_url, bio, is_private,
+      EXISTS (SELECT 1 FROM follows WHERE follower_id = profiles.id AND following_id = ${user.id}) AS follows_you
+    FROM profiles WHERE username = ${username}`
+  const row = found[0]
+  if (!row) throw new HttpError(404, 'Profile not found')
+  const { follows_you: followsYou, ...profile } = row
   const id = profile.id as string
+  const own = id === user.id
+
+  // Private profile the viewer can't see: name, photo, bio and counts only.
+  if (!own && profile.is_private && !followsYou) {
+    const [followers, following, followCheck] = await sql.transaction(
+      [
+        sql`SELECT COUNT(*)::int AS n FROM follows WHERE following_id = ${id}`,
+        sql`SELECT COUNT(*)::int AS n FROM follows WHERE follower_id = ${id}`,
+        sql`SELECT 1 FROM follows WHERE follower_id = ${user.id} AND following_id = ${id}`,
+      ],
+      { readOnly: true },
+    )
+    return {
+      locked: true,
+      profile,
+      badges: [],
+      episodesThisMonth: 0,
+      top5: [],
+      ratings: [],
+      watchlist: [],
+      stats: { movie_hours: 0, series_hours: 0, movie_count: 0, series_count: 0, episode_count: 0 },
+      favoriteGenre: null,
+      followers: followers[0].n,
+      following: following[0].n,
+      isFollowing: followCheck.length > 0,
+      followsYou,
+    }
+  }
 
   const [top5, ratings, watchlist, stats, genre, followers, following, followCheck, badgeRow] = await sql.transaction(
     [
@@ -199,10 +313,10 @@ const profileByUsername: Handler = async ({ user, params }) => {
           WHERE t.user_id = ${id} ORDER BY t.rank`,
       sql.query(
         `SELECT r.id, r.rating::float8 AS rating, r.description, to_char(r.watched_date, 'YYYY-MM-DD') AS watched_date,
-           COALESCE(r.date_type, 'unknown') AS date_type, ${movieJson} AS movie
+           COALESCE(r.date_type, 'unknown') AS date_type, r.is_private, ${movieJson} AS movie
          FROM ratings r JOIN movies m ON m.id = r.movie_id
-         WHERE r.user_id = $1 ORDER BY r.created_at DESC`,
-        [id],
+         WHERE r.user_id = $1 AND ($2 OR NOT r.is_private) ORDER BY r.created_at DESC`,
+        [id, own],
       ),
       sql.query(
         `SELECT ${movieJson} AS movie FROM watchlist w JOIN movies m ON m.id = w.movie_id
@@ -245,6 +359,8 @@ const profileByUsername: Handler = async ({ user, params }) => {
     followers: followers[0].n,
     following: following[0].n,
     isFollowing: followCheck.length > 0,
+    followsYou,
+    locked: false,
   }
 }
 
@@ -255,7 +371,8 @@ const titleStatus: Handler = async ({ user, params, url }) => {
   const rows = await db()`
     SELECT m.id AS movie_id,
       (SELECT json_build_object('id', r.id, 'rating', r.rating::float8, 'description', r.description,
-                'watched_date', to_char(r.watched_date, 'YYYY-MM-DD'), 'date_type', COALESCE(r.date_type, 'unknown'))
+                'watched_date', to_char(r.watched_date, 'YYYY-MM-DD'), 'date_type', COALESCE(r.date_type, 'unknown'),
+                'is_private', r.is_private)
          FROM ratings r WHERE r.movie_id = m.id AND r.user_id = ${user.id}) AS rating,
       EXISTS (SELECT 1 FROM watchlist w WHERE w.movie_id = m.id AND w.user_id = ${user.id}) AS on_watchlist
     FROM movies m
@@ -365,12 +482,13 @@ const saveRating: Handler = async ({ user, body }) => {
   const description = optText(body.description, 'description', 2000)
   const watchedDate = optDate(body.watched_date, 'watched_date')
   const dateType = ['exact', 'release', 'unknown'].includes(String(body.date_type)) ? String(body.date_type) : 'unknown'
+  const isPrivate = body.is_private === true
   const sql = db()
 
   if (body.id) {
     const rows = await sql`
       UPDATE ratings SET rating = ${rating}, description = ${description}, watched_date = ${watchedDate},
-        date_type = ${dateType}, updated_at = NOW()
+        date_type = ${dateType}, is_private = ${isPrivate}, updated_at = NOW()
       WHERE id = ${uuid(body.id, 'id')} AND user_id = ${user.id}
       RETURNING id`
     if (!rows[0]) throw new HttpError(404, 'That rating no longer exists')
@@ -379,8 +497,8 @@ const saveRating: Handler = async ({ user, body }) => {
 
   const movieId = uuid(body.movie_id, 'movie_id')
   const inserted = await sql`
-    INSERT INTO ratings (user_id, movie_id, rating, description, watched_date, date_type)
-    VALUES (${user.id}, ${movieId}, ${rating}, ${description}, ${watchedDate}, ${dateType})
+    INSERT INTO ratings (user_id, movie_id, rating, description, watched_date, date_type, is_private)
+    VALUES (${user.id}, ${movieId}, ${rating}, ${description}, ${watchedDate}, ${dateType}, ${isPrivate})
     ON CONFLICT (user_id, movie_id) DO NOTHING
     RETURNING id`
   if (!inserted[0]) throw new HttpError(409, 'You already logged this title', 'already_rated')
@@ -410,6 +528,14 @@ const removeFromWatchlist: Handler = async ({ user, params }) => {
   return { status: 'removed' }
 }
 
+async function assertRatingVisible(ratingId: string, viewer: string) {
+  const rows = await db().query(
+    `SELECT 1 FROM ratings r JOIN profiles p ON p.id = r.user_id WHERE r.id = $2 AND ${canSeeRating('r', 'p', '$1')}`,
+    [viewer, ratingId],
+  )
+  if (!rows[0]) throw new HttpError(404, 'That rating is private or no longer exists')
+}
+
 const setReaction: Handler = async ({ user, body }) => {
   const ratingId = uuid(body.rating_id, 'rating_id')
   const sql = db()
@@ -418,6 +544,7 @@ const setReaction: Handler = async ({ user, body }) => {
     return { reaction: null }
   }
   if (body.reaction !== 'like' && body.reaction !== 'dislike') throw new HttpError(400, 'reaction must be like, dislike or null')
+  await assertRatingVisible(ratingId, user.id)
   await sql`
     INSERT INTO reactions (rating_id, user_id, reaction) VALUES (${ratingId}, ${user.id}, ${body.reaction})
     ON CONFLICT (rating_id, user_id) DO UPDATE SET reaction = EXCLUDED.reaction, created_at = NOW()`
@@ -427,6 +554,7 @@ const setReaction: Handler = async ({ user, body }) => {
 const addComment: Handler = async ({ user, body }) => {
   const content = optText(body.content, 'content', 500)
   if (!content) throw new HttpError(400, 'Write something before posting')
+  await assertRatingVisible(uuid(body.rating_id, 'rating_id'), user.id)
   const rows = await db()`
     INSERT INTO comments (rating_id, user_id, content)
     VALUES (${uuid(body.rating_id, 'rating_id')}, ${user.id}, ${content})
@@ -471,9 +599,10 @@ const updateProfile: Handler = async ({ user, body }) => {
         username = ${username},
         bio = ${optText(body.bio, 'bio', 1000)},
         avatar_url = CASE WHEN ${touchesAvatar} THEN ${avatarUrl} ELSE avatar_url END,
+        is_private = CASE WHEN ${typeof body.is_private === 'boolean'} THEN ${body.is_private === true} ELSE is_private END,
         updated_at = NOW()
       WHERE id = ${user.id}
-      RETURNING id, username, display_name, avatar_url, bio`
+      RETURNING id, username, display_name, avatar_url, bio, is_private`
     return { profile: rows[0] }
   } catch (error) {
     if (pgErrorCode(error) === '23505') throw new HttpError(409, 'That username is taken. Try another one.', 'username_taken')
@@ -494,7 +623,7 @@ const uploadAvatar: Handler = async ({ user, body }) => {
     sql`INSERT INTO avatars (user_id, mime, data_b64) VALUES (${user.id}, ${parsed.mime}, ${parsed.base64})
         ON CONFLICT (user_id) DO UPDATE SET mime = EXCLUDED.mime, data_b64 = EXCLUDED.data_b64, updated_at = NOW()`,
     sql`UPDATE profiles SET avatar_url = ${url}, updated_at = NOW() WHERE id = ${user.id}
-        RETURNING id, username, display_name, avatar_url, bio`,
+        RETURNING id, username, display_name, avatar_url, bio, is_private`,
   ])
   return { profile: rows[0] }
 }
@@ -504,7 +633,7 @@ const removeAvatar: Handler = async ({ user }) => {
   const [, rows] = await sql.transaction([
     sql`DELETE FROM avatars WHERE user_id = ${user.id}`,
     sql`UPDATE profiles SET avatar_url = NULL, updated_at = NOW() WHERE id = ${user.id}
-        RETURNING id, username, display_name, avatar_url, bio`,
+        RETURNING id, username, display_name, avatar_url, bio, is_private`,
   ])
   return { profile: rows[0] }
 }
@@ -513,7 +642,7 @@ const avatarImage: Handler = async ({ params }) => {
   const rows = await db()`SELECT mime, data_b64 FROM avatars WHERE user_id = ${uuid(params[0], 'profile id')}`
   if (!rows[0]) throw new HttpError(404, 'No photo')
   // URLs carry ?v=<ms>, so a new upload gets a new URL and this copy can be cached for good.
-  return new Response(Buffer.from(rows[0].data_b64, 'base64'), {
+  return new Response(new Uint8Array(Buffer.from(rows[0].data_b64, 'base64')), {
     headers: { 'Content-Type': rows[0].mime, 'Cache-Control': 'private, max-age=31536000, immutable' },
   })
 }
@@ -521,6 +650,26 @@ const avatarImage: Handler = async ({ params }) => {
 const undoDismissRecommendation: Handler = async ({ user, params }) => {
   await db()`DELETE FROM recommendation_feedback WHERE user_id = ${user.id} AND tmdb_id = ${int(params[0], 'tmdb_id')}`
   return { status: 'restored' }
+}
+
+/** Find people by username or name. Empty query: suggestions, people you don't follow yet first. */
+const searchPeople: Handler = async ({ user, url }) => {
+  const q = (url.searchParams.get('q') || '').trim().slice(0, 50)
+  const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`)
+  const rows = await db().query(
+    `SELECT p.id, p.username, p.display_name, p.avatar_url, p.bio, p.is_private,
+       (SELECT COUNT(*)::int FROM follows WHERE following_id = p.id) AS followers,
+       CASE WHEN ${canSeeProfile('p', '$1')}
+         THEN (SELECT COUNT(*)::int FROM ratings WHERE user_id = p.id AND NOT is_private) END AS rating_count,
+       EXISTS (SELECT 1 FROM follows WHERE follower_id = $1 AND following_id = p.id) AS is_following,
+       EXISTS (SELECT 1 FROM follows WHERE follower_id = p.id AND following_id = $1) AS follows_you
+     FROM profiles p
+     WHERE p.id <> $1 AND ($2 = '' OR p.username ILIKE $3 OR p.display_name ILIKE $3)
+     ORDER BY ($2 <> '' AND p.username ILIKE $4) DESC, is_following ASC, followers DESC, p.username
+     LIMIT 30`,
+    [user.id, q, `%${escaped}%`, `${escaped}%`],
+  )
+  return { people: rows }
 }
 
 const follow: Handler = async ({ user, params }) => {
@@ -558,7 +707,8 @@ const routes: Array<[method: string, pattern: RegExp, handler: Handler]> = [
   ['GET', /^me$/, me],
   ['GET', /^home$/, home],
   ['GET', /^social$/, social],
-  ['GET', /^recommendation-seeds$/, recommendationSeeds],
+  ['GET', /^recommendations$/, recommendations],
+  ['GET', /^people$/, searchPeople],
   ['GET', /^profiles\/([^/]+)$/, profileByUsername],
   ['PATCH', /^profile$/, updateProfile],
   ['PUT', /^avatar$/, uploadAvatar],

@@ -60,6 +60,11 @@ CREATE INDEX IF NOT EXISTS idx_ratings_user_id ON ratings(user_id);
 CREATE INDEX IF NOT EXISTS idx_ratings_movie_id ON ratings(movie_id);
 CREATE INDEX IF NOT EXISTS idx_ratings_created_at ON ratings(created_at DESC);
 
+-- Privacy. A private log is seen only by its owner. A private profile shows its ratings, lists
+-- and Top 5 only to people the owner follows (owner follows viewer ⇒ viewer may see).
+ALTER TABLE ratings ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS follows (
   follower_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   following_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,

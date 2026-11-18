@@ -5,6 +5,7 @@ import type { SearchResult } from '../components/MovieSearch'
 import StarRating from '../components/StarRating'
 import Dialog, { CloseButton } from '../components/Dialog'
 import { ensureMovieInDb, fetchMovieDetails } from '../lib/movies'
+import LockIcon from '../components/LockIcon'
 
 type DateMode = 'exact' | 'release' | 'unknown'
 
@@ -14,6 +15,7 @@ export interface ExistingRating {
   description: string | null
   watched_date: string | null
   date_type: DateMode
+  is_private?: boolean
 }
 
 interface RateMovieProps {
@@ -40,6 +42,7 @@ export default function RateMovie({ movie, onDone, onCancel, existingRating }: R
   const [description, setDescription] = useState(existingRating?.description ?? '')
   const [dateMode, setDateMode] = useState<DateMode>(existingRating?.date_type ?? 'unknown')
   const [exactDate, setExactDate] = useState(existingRating?.watched_date ?? '')
+  const [isPrivate, setIsPrivate] = useState(existingRating?.is_private ?? false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
@@ -81,6 +84,7 @@ export default function RateMovie({ movie, onDone, onCancel, existingRating }: R
           description: description.trim() || null,
           watched_date: watchedDate,
           date_type: dateMode,
+          is_private: isPrivate,
         },
       })
 
@@ -206,6 +210,34 @@ export default function RateMovie({ movie, onDone, onCancel, existingRating }: R
               {details?.release_date ? `Saved as ${details.release_date}` : 'Looking up the release date…'}
             </p>
           )}
+        </fieldset>
+
+        <fieldset>
+          <legend className={fieldLabel}>Who can see this log</legend>
+          <div className="inline-flex gap-1 rounded-full bg-raised p-1">
+            {([
+              [false, 'Everyone'],
+              [true, 'Only me'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={isPrivate === value}
+                onClick={() => setIsPrivate(value)}
+                className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                  isPrivate === value ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink'
+                }`}
+              >
+                {value && <LockIcon className="h-3.5 w-3.5" />}
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-ink-muted">
+            {isPrivate
+              ? 'Only you can see it. It still counts in your library and stats, but no one else sees it in the feed or on your profile.'
+              : 'Shows in the group feed and on your profile, where friends can react and reply.'}
+          </p>
         </fieldset>
 
         <p role="alert" className={error ? 'rounded-xl bg-danger/10 px-3.5 py-2.5 text-sm text-danger' : 'sr-only'}>

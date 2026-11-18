@@ -9,7 +9,8 @@ import { useToast } from '../lib/Toast'
 import { usePageTitle } from '../lib/usePageTitle'
 import MovieDetail from '../components/MovieDetail'
 import TierList from '../components/TierList'
-import BadgeStrip, { type Badge } from '../components/BadgeStrip'
+import BadgeIcons, { type Badge } from '../components/BadgeIcons'
+import LockIcon from '../components/LockIcon'
 import RatingHistogram from '../components/RatingHistogram'
 import RateMovie from './RateMovie'
 import Dialog, { CloseButton } from '../components/Dialog'
@@ -23,6 +24,7 @@ interface ProfileRow {
   display_name: string | null
   avatar_url: string | null
   bio: string | null
+  is_private: boolean
 }
 
 interface WatchStats {
@@ -45,6 +47,9 @@ interface ProfileResponse {
   isFollowing: boolean
   badges: Badge[]
   episodesThisMonth: number
+  followsYou: boolean
+  /** Private profile the viewer can't see: only name, photo, bio and counts come back. */
+  locked: boolean
 }
 
 export default function Profile() {
@@ -60,7 +65,9 @@ export default function Profile() {
   const [ratingTarget, setRatingTarget] = useState<SearchResult | null>(null)
   const [editingRating, setEditingRating] = useState<ProfileRating | null>(null)
   const [editingProfile, setEditingProfile] = useState(false)
-  const [profileForm, setProfileForm] = useState({ display_name: '', username: '', bio: '' })
+  const [profileForm, setProfileForm] = useState({ display_name: '', username: '', bio: '', is_private: false })
+  const [locked, setLocked] = useState(false)
+  const [followsYou, setFollowsYou] = useState(false)
   const [stats, setStats] = useState<WatchStats | null>(null)
   const [favoriteGenre, setFavoriteGenre] = useState<string | null>(null)
   const [followers, setFollowers] = useState(0)
@@ -100,12 +107,15 @@ export default function Profile() {
       display_name: profileData.display_name ?? '',
       username: profileData.username,
       bio: profileData.bio ?? '',
+      is_private: profileData.is_private ?? false,
     })
+    setLocked(data.locked ?? false)
+    setFollowsYou(data.followsYou ?? false)
 
     setTop5(data.top5)
     setRatings(data.ratings)
     // Watched is what they've rated; unrated Top 5 picks live only in the Top 5 row.
-    setRecentMovies(data.ratings.map((row) => ({ ...row.movie, rating: Number(row.rating) })))
+    setRecentMovies(data.ratings.map((row) => ({ ...row.movie, rating: Number(row.rating), is_private: row.is_private })))
     setWatchlist(data.watchlist)
     setStats(data.stats)
     setFavoriteGenre(data.favoriteGenre)
@@ -154,6 +164,7 @@ export default function Profile() {
           display_name: profileForm.display_name,
           username: profileForm.username,
           bio: profileForm.bio,
+          is_private: profileForm.is_private,
         },
       })
       setProfile(saved)
@@ -220,19 +231,20 @@ export default function Profile() {
   return (
     <div>
       <div className="mx-auto max-w-5xl px-4 pb-16 sm:px-6">
-        <section className="relative -mx-4 overflow-hidden px-4 pb-8 pt-12 sm:-mx-6 sm:px-6">
-          {top5[0]?.poster_path && (
+        <section className="relative z-10 -mx-4 px-4 pb-8 pt-12 sm:-mx-6 sm:px-6">
+          {/* Backdrop clips itself, so popovers in the header (badge details) can overflow freely */}
+          <div aria-hidden="true" className="absolute inset-0 overflow-hidden">
+            {top5[0]?.poster_path && (
+              <div
+                className="absolute inset-0 bg-cover opacity-40 blur-sm"
+                style={{ backgroundImage: `url(https://image.tmdb.org/t/p/w780${top5[0].poster_path})`, backgroundPosition: 'center 22%' }}
+              />
+            )}
             <div
-              aria-hidden="true"
-              className="absolute inset-0 bg-cover opacity-40 blur-sm"
-              style={{ backgroundImage: `url(https://image.tmdb.org/t/p/w780${top5[0].poster_path})`, backgroundPosition: 'center 22%' }}
+              className="absolute inset-0"
+              style={{ background: 'linear-gradient(0deg, rgb(var(--canvas)) 0%, rgb(var(--canvas) / 0.75) 55%, rgb(var(--canvas) / 0.45) 100%)' }}
             />
-          )}
-          <div
-            aria-hidden="true"
-            className="absolute inset-0"
-            style={{ background: 'linear-gradient(0deg, rgb(var(--canvas)) 0%, rgb(var(--canvas) / 0.75) 55%, rgb(var(--canvas) / 0.45) 100%)' }}
-          />
+          </div>
 
           <div className="relative flex flex-col gap-6 sm:flex-row sm:items-end">
             {isOwnProfile ? (
@@ -253,8 +265,18 @@ export default function Profile() {
 
             <div className="min-w-0 flex-1">
               <h1 className="font-display text-[clamp(2.75rem,7vw,4.5rem)] font-black uppercase leading-[0.85]">{name}</h1>
-              <p className="mt-2 text-ink-muted">@{profile.username}</p>
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-ink-muted">
+                @{profile.username}
+                {profile.is_private && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-raised px-2.5 py-0.5 text-xs font-semibold text-ink">
+                    <LockIcon className="h-3 w-3" />
+                    Private
+                  </span>
+                )}
+                {!isOwnProfile && followsYou && <span className="rounded-full bg-raised px-2.5 py-0.5 text-xs font-semibold text-ink">Follows you</span>}
+              </p>
               {profile.bio && <p className="mt-3 max-w-xl leading-relaxed">{profile.bio}</p>}
+              <BadgeIcons badges={badges} isOwnProfile={isOwnProfile} />
 
               <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3 text-sm">
                 <span>
@@ -292,6 +314,19 @@ export default function Profile() {
           </div>
         </section>
 
+        {locked ? (
+          <section className="mt-6 rounded-2xl border border-dashed border-line px-6 py-12 text-center" aria-labelledby="locked-title">
+            <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-raised text-ink-muted">
+              <LockIcon className="h-5 w-5" />
+            </span>
+            <h2 id="locked-title" className="mt-4 font-display text-2xl font-extrabold">This profile is private</h2>
+            <p className="mx-auto mt-1 max-w-sm text-sm text-ink-muted">
+              {name} shares ratings, lists and their Top 5 with people they follow.
+              {isFollowing ? ' You’re following them; once they follow you back, it all opens up.' : ' Follow them, and once they follow you back you’ll see everything.'}
+            </p>
+          </section>
+        ) : (
+        <>
         <section className="mt-4" aria-labelledby="stats-title">
           <h2 id="stats-title" className="sr-only">Watch stats</h2>
           <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-line bg-line sm:grid-cols-3">
@@ -313,8 +348,6 @@ export default function Profile() {
             ))}
           </dl>
         </section>
-
-        <BadgeStrip badges={badges} isOwnProfile={isOwnProfile} name={name} />
 
         <section className="mt-14" aria-labelledby="top5-title">
           <div className="mb-8 flex items-end justify-between gap-4">
@@ -381,6 +414,8 @@ export default function Profile() {
             }}
           />
         </section>
+        </>
+        )}
       </div>
 
       {editingProfile && (
@@ -420,6 +455,33 @@ export default function Profile() {
                   <span className="mt-1 block text-xs font-normal text-ink-muted">{hint}</span>
                 </label>
               ))}
+              <fieldset>
+                <legend className="text-sm font-semibold">Profile visibility</legend>
+                <div className="mt-1.5 inline-flex gap-1 rounded-full bg-raised p-1">
+                  {([
+                    [false, 'Public'],
+                    [true, 'Private'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      aria-pressed={profileForm.is_private === value}
+                      onClick={() => setProfileForm((form) => ({ ...form, is_private: value }))}
+                      className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                        profileForm.is_private === value ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink'
+                      }`}
+                    >
+                      {value && <LockIcon className="h-3.5 w-3.5" />}
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <span className="mt-1 block text-xs text-ink-muted">
+                  {profileForm.is_private
+                    ? 'Only people you follow see your ratings, lists and Top 5. Everyone can still find you and follow you.'
+                    : 'Anyone in the group can see your ratings, lists and Top 5.'}
+                </span>
+              </fieldset>
               <label className="block text-sm font-semibold">
                 Bio
                 <textarea

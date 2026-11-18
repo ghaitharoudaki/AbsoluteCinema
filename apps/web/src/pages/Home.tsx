@@ -9,6 +9,7 @@ import { api, errorMessage } from '../lib/api'
 import { timeAgo } from '../lib/library'
 import ContinueWatching from '../components/ContinueWatching'
 import Avatar from '../components/Avatar'
+import LockIcon from '../components/LockIcon'
 import { toSearchResult, type PosterItem } from '../components/PosterRail'
 
 interface Movie extends PosterItem {
@@ -22,6 +23,7 @@ interface Rating {
   rating: number
   description: string | null
   created_at: string
+  is_private?: boolean
   movie: Movie
   profile: { username: string; avatar_url: string | null }
 }
@@ -184,6 +186,9 @@ export default function Home() {
         <div className="flex flex-wrap gap-2">
           <Link to="/discover" className="rounded-full border border-line px-5 py-2.5 text-sm font-semibold transition-colors hover:border-ink-muted">
             Find something to watch
+          </Link>
+          <Link to="/people" className="rounded-full border border-line px-5 py-2.5 text-sm font-semibold transition-colors hover:border-ink-muted">
+            Find people
           </Link>
           <button
             type="button"
@@ -368,6 +373,12 @@ function FeedCard({ rating, reactions, comments, myId, onOpen, onReact, onCommen
           <span className="truncate font-semibold hover:underline">{username}</span>
         </Link>
         <span className="text-ink-muted">rated</span>
+        {rating.is_private && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-0.5 text-xs font-semibold text-ink-muted" title="Private log: only you can see it">
+            <LockIcon className="h-3 w-3" />
+            Only you
+          </span>
+        )}
         <time dateTime={rating.created_at} title={new Date(rating.created_at).toLocaleString()} className="ml-auto shrink-0 text-xs text-ink-muted">
           {timeAgo(rating.created_at)}
         </time>

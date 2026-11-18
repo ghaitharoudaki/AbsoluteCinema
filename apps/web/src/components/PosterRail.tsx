@@ -9,6 +9,8 @@ export interface PosterItem {
   release_year: number | string | null
   media_type: string
   avg_score?: number | null
+  /** Why it was suggested: the favourite it came from, or "Trending this week". */
+  because?: string
 }
 
 interface PosterRailProps {
@@ -124,6 +126,14 @@ export default function PosterRail({
                 </span>
                 <span className="mt-2.5 block truncate text-sm font-semibold">{item.title}</span>
                 <span className="block text-xs text-ink-muted">{item.release_year || 'Year unknown'}</span>
+                {item.because && (
+                  <span
+                    className="mt-0.5 block truncate text-xs text-ink-muted"
+                    title={item.because === 'Trending this week' ? item.because : `Because you liked ${item.because}`}
+                  >
+                    {item.because === 'Trending this week' ? item.because : <>Because you liked <span className="font-semibold text-ink">{item.because}</span></>}
+                  </span>
+                )}
               </button>
               {onHide && (
                 <button

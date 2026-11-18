@@ -8,6 +8,7 @@ import { usePageTitle } from '../lib/usePageTitle'
 import { groupByMonth, pickRandom } from '../lib/library'
 import MovieShelf, { type ProfileMovie, type ProfileRating } from '../components/MovieShelf'
 import type { SearchResult } from '../components/MovieSearch'
+import LockIcon from '../components/LockIcon'
 
 type Tab = 'watched' | 'diary' | 'watchlist'
 
@@ -104,7 +105,7 @@ export default function Library() {
     }
   }
 
-  const watched = ratings.map((row) => ({ ...row.movie, rating: Number(row.rating) }))
+  const watched = ratings.map((row) => ({ ...row.movie, rating: Number(row.rating), is_private: row.is_private }))
   const films = ratings.filter((r) => r.movie.media_type !== 'tv').length
   const average = ratings.length ? ratings.reduce((sum, r) => sum + Number(r.rating), 0) / ratings.length : null
   const logButton = (
@@ -237,7 +238,15 @@ function Diary({ ratings, onEdit, emptyAction }: { ratings: ProfileRating[]; onE
                       {rating.movie.poster_path && <img src={`https://image.tmdb.org/t/p/w200${rating.movie.poster_path}`} alt="" loading="lazy" className="h-full w-full object-cover" />}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold">{rating.movie.title}</span>
+                      <span className="flex items-center gap-1.5 font-semibold">
+                        <span className="truncate">{rating.movie.title}</span>
+                        {rating.is_private && (
+                          <span className="shrink-0 text-ink-muted" title="Private log: only you can see it">
+                            <LockIcon className="h-3.5 w-3.5" />
+                            <span className="sr-only">(private)</span>
+                          </span>
+                        )}
+                      </span>
                       <span className="block text-xs text-ink-muted">
                         {rating.movie.release_year ?? 'Year unknown'}
                         {rating.movie.media_type === 'tv' ? ', series' : ''}

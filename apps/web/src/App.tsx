@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Home from './pages/Home'
 import Discover from './pages/Discover'
 import Library from './pages/Library'
+import People from './pages/People'
 import AppShell from './components/AppShell'
 import Profile from './pages/Profile'
 import Import from './pages/Import'
@@ -32,6 +33,7 @@ function AppRoutes() {
         <Route path="/" element={<Home />} />
         <Route path="/discover" element={<Discover />} />
         <Route path="/library" element={<Library />} />
+        <Route path="/people" element={<People />} />
         <Route path="/import" element={<Import />} />
         <Route path="/profile/:username" element={<Profile />} />
         <Route path="*" element={<Navigate to="/" replace />} />

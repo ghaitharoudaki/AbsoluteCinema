@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { api } from '../lib/api'
+import { api, errorMessage } from '../lib/api'
 import { useLogFlow } from '../lib/LogFlow'
 import { useToast } from '../lib/Toast'
 import { usePageTitle } from '../lib/usePageTitle'
@@ -9,15 +9,13 @@ import PosterRail, { type PosterItem } from '../components/PosterRail'
 interface HomeData {
   featuredRow: (PosterItem & { id: string })[]
   recentRatings: { movie: PosterItem & { id: string } }[]
-  recentMovieTmdbIds: number[]
-  myRatedTmdbIds: number[]
 }
 
 type Section = 'theaters' | 'picks' | 'friends'
 
 const sections: Record<Section, { title: string; subtitle: string }> = {
   theaters: { title: 'In theaters this week', subtitle: 'New releases and the most watched films right now.' },
-  picks: { title: 'Picked for you', subtitle: 'Based on your highest ratings and your Top 5.' },
+  picks: { title: 'Picked for you', subtitle: 'Drawn from the titles you rated highest and your Top 5. Each refresh samples different favourites.' },
   friends: { title: 'Your friends are watching', subtitle: 'The latest titles logged by the group.' },
 }
 
@@ -37,46 +35,31 @@ export default function Discover() {
   const [picks, setPicks] = useState<PosterItem[]>([])
   const [picksLoading, setPicksLoading] = useState(true)
   const [picksMessage, setPicksMessage] = useState<string | null>(null)
-  const excludeRef = useRef<Set<number>>(new Set())
+  const [picksCold, setPicksCold] = useState(false)
   const hiddenRef = useRef<Set<number>>(new Set())
-  const offsetRef = useRef(0)
+  const shuffleRef = useRef(0)
 
+  // The server samples a different handful of favourites for each shuffle number.
   const loadPicks = useCallback(async () => {
     setPicksLoading(true)
     setPicksMessage(null)
     try {
-      const { seeds: allSeeds, dismissed } = await api<{ seeds: { tmdb_id: number; media_type: string }[]; dismissed: number[] }>('recommendation-seeds')
-      dismissed.forEach((id) => hiddenRef.current.add(id))
-      const seeds = allSeeds.filter((seed, i, all) => all.findIndex((s) => s.tmdb_id === seed.tmdb_id) === i).slice(0, 5)
-      if (seeds.length === 0) {
-        setPicks([])
-        setPicksMessage('Rate a few titles or set your Top 5, and picks show up here.')
-        return
-      }
-      const rotated = seeds.map((_, i) => seeds[(i + offsetRef.current) % seeds.length])
-      const mediaType = rotated.every((seed) => seed.media_type === 'tv') ? 'tv' : 'movie'
-      const ids = rotated.filter((seed) => seed.media_type === mediaType).map((seed) => seed.tmdb_id)
-      const res = await fetch(`/api/tmdb/Recommendations?tmdb_ids=${ids.join(',')}&media_type=${mediaType}&refresh=${Date.now()}`)
-      if (!res.ok) throw new Error('Recommendations request failed')
-      const data = await res.json()
-      const results: PosterItem[] = (data.results || []).filter(
-        (item: PosterItem) => !excludeRef.current.has(item.tmdb_id) && !hiddenRef.current.has(item.tmdb_id),
-      )
-      setPicks(results.slice(0, focus === 'picks' ? 24 : 12))
+      const { picks: results, cold } = await api<{ picks: PosterItem[]; cold: boolean }>(`recommendations?shuffle=${shuffleRef.current}`)
+      setPicks(results.filter((item) => !hiddenRef.current.has(item.tmdb_id)))
+      setPicksCold(cold)
+      if (results.length === 0) setPicksMessage('Nothing new to suggest right now. Rate a few more titles and check back.')
     } catch (error) {
-      console.error('Recommendations error:', error)
-      setPicksMessage('Picks didn’t load. Try Show other picks in a moment.')
+      setPicksMessage(errorMessage(error, 'Picks didn’t load. Try Show other picks in a moment.'))
     } finally {
       setPicksLoading(false)
     }
-  }, [focus])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
     api<HomeData>('home')
       .then((data) => {
         if (cancelled) return
-        excludeRef.current = new Set([...data.recentMovieTmdbIds, ...data.myRatedTmdbIds])
         setFriends(Array.from(new Map(data.recentRatings.map((r) => [r.movie.id, r.movie])).values()))
         setTheaters((current) => (current.length ? current : data.featuredRow))
       })
@@ -121,7 +104,7 @@ export default function Discover() {
     <button
       type="button"
       onClick={() => {
-        offsetRef.current += 1
+        shuffleRef.current += 1
         void loadPicks()
       }}
       disabled={picksLoading}
@@ -143,6 +126,7 @@ export default function Discover() {
     },
     picks: {
       ...sections.picks,
+      subtitle: picksCold ? 'Trending this week. Rate a few titles and this row learns your taste.' : sections.picks.subtitle,
       items: picks,
       loading: picksLoading,
       onOpen: openTitle,

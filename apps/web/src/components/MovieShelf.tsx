@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import LockIcon from './LockIcon'
 
 export interface ProfileMovie {
   id: string
@@ -8,6 +9,8 @@ export interface ProfileMovie {
   release_year: number | null
   media_type: string
   rating?: number
+  /** A private log: only the owner sees it. */
+  is_private?: boolean
 }
 
 export interface ProfileRating {
@@ -17,6 +20,7 @@ export interface ProfileRating {
   description: string | null
   watched_date: string | null
   date_type: 'exact' | 'release' | 'unknown'
+  is_private?: boolean
 }
 
 interface MovieShelfProps {
@@ -164,6 +168,12 @@ export default function MovieShelf({
                       <span className="flex h-full items-center justify-center p-3 text-center font-display text-lg font-bold text-ink-muted">{movie.title}</span>
                     )}
                     {movie.rating !== undefined && <span className="ticket absolute left-2 top-2 text-base">{movie.rating.toFixed(1)}</span>}
+                    {movie.is_private && (
+                      <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-[rgb(var(--shadow)/0.7)] text-white backdrop-blur-sm" title="Private log: only you can see it">
+                        <LockIcon className="h-3.5 w-3.5" />
+                        <span className="sr-only">Private log</span>
+                      </span>
+                    )}
                   </span>
                   <span className="mt-2.5 block truncate text-sm font-semibold">{movie.title}</span>
                   <span className="block text-xs text-ink-muted">{movie.release_year ?? 'Year unknown'}</span>

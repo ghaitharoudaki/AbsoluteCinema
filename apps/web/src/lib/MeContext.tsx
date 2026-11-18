@@ -8,6 +8,7 @@ export interface MyProfile {
   display_name: string | null
   avatar_url: string | null
   bio: string | null
+  is_private: boolean
 }
 
 interface MeContextType {
