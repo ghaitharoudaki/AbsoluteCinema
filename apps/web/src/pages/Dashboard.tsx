@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../lib/AuthContext";
-import { supabase } from "../lib/supabase";
+import { api, errorMessage } from "../lib/api";
 import NavBar from "../components/NavBar";
 import MovieSearch, { type SearchResult } from "../components/MovieSearch";
 import MovieDetail from "../components/MovieDetail";
@@ -32,36 +32,10 @@ interface FeaturedMovie extends Movie {
   rating_count: number;
 }
 
-async function loadRecentRatings(): Promise<Rating[]> {
-  const { data: ratingRows, error } = await supabase
-    .from("ratings")
-    .select("id, movie_id, user_id, rating, description, created_at")
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  if (error || !ratingRows?.length) {
-    if (error) console.error("Recent ratings error:", error);
-    return [];
-  }
-
-  const movieIds = [...new Set(ratingRows.map((row) => row.movie_id))];
-  const userIds = [...new Set(ratingRows.map((row) => row.user_id))];
-  const [{ data: movies }, { data: profiles }] = await Promise.all([
-    supabase.from("movies").select("id, tmdb_id, title, release_year, poster_path, media_type").in("id", movieIds),
-    supabase.from("profiles").select("id, username, avatar_url").in("id", userIds),
-  ]);
-  const moviesById = new Map((movies || []).map((movie) => [movie.id, movie as unknown as Movie]));
-  const profilesById = new Map((profiles || []).map((profile) => [profile.id, profile]));
-
-  return ratingRows.flatMap((row) => {
-    const movie = moviesById.get(row.movie_id);
-    if (!movie) return [];
-    return [{
-      ...row,
-      movie,
-      profile: profilesById.get(row.user_id) || { username: "Friend", avatar_url: null },
-    } as unknown as Rating];
-  });
+interface ReactionRow {
+  rating_id: string;
+  user_id: string;
+  reaction: "like" | "dislike";
 }
 
 interface ReactionSummary {
@@ -78,6 +52,19 @@ interface Comment {
   profile: { username: string } | null;
 }
 
+interface SocialData {
+  reactions: ReactionRow[];
+  comments: Comment[];
+}
+
+interface HomeData extends SocialData {
+  featured: FeaturedMovie | null;
+  featuredRow: FeaturedMovie[];
+  recentRatings: Rating[];
+  recentMovieTmdbIds: number[];
+  myRatedTmdbIds: number[];
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const [featured, setFeatured] = useState<FeaturedMovie | null>(null);
@@ -90,6 +77,7 @@ export default function Dashboard() {
   const [dismissedRecommendations, setDismissedRecommendations] = useState<Set<number>>(new Set());
   const [recentRatings, setRecentRatings] = useState<Rating[]>([]);
   const [loggedMovies, setLoggedMovies] = useState<Movie[]>([]);
+  const [excludedTmdbIds, setExcludedTmdbIds] = useState<Set<number>>(new Set());
   const [myRatedTmdbIds, setMyRatedTmdbIds] = useState<Set<number>>(new Set());
   const [reactionSummary, setReactionSummary] = useState<Record<string, ReactionSummary>>({});
   const [comments, setComments] = useState<Record<string, Comment[]>>({});
@@ -102,35 +90,37 @@ export default function Dashboard() {
   const [logStep, setLogStep] = useState<"search" | "detail" | "rate" | null>(null);
   const [selectedMovie, setSelectedMovie] = useState<SearchResult | null>(null);
 
-  const displayName = user?.email?.split("@")[0] || "Guest";
+  const displayName = user?.name?.split(" ")[0] || user?.email?.split("@")[0] || "there";
 
   const dismissRecommendation = async (movie: SearchResult) => {
-    if (!user) return;
     setDismissedRecommendations((current) => new Set(current).add(movie.tmdb_id));
     setRecommended((current) => current.filter((item) => item.tmdb_id !== movie.tmdb_id));
-    await supabase.from("recommendation_feedback").upsert({ user_id: user.id, tmdb_id: movie.tmdb_id });
+    await api("recommendation-feedback", { method: "POST", body: { tmdb_id: movie.tmdb_id } }).catch((error) =>
+      console.error("Dismiss recommendation failed:", error)
+    );
   };
 
-  const loadSocialData = async (ratingIds: string[]) => {
-    if (!user || ratingIds.length === 0) return;
-    const [{ data: reactions }, { data: commentRows }] = await Promise.all([
-      supabase.from("reactions").select("rating_id, user_id, reaction").in("rating_id", ratingIds),
-      supabase.from("comments").select("id, rating_id, user_id, content, profile:profiles(username)").in("rating_id", ratingIds).order("created_at"),
-    ]);
+  const applySocialData = ({ reactions, comments: commentRows }: SocialData) => {
     const summary: Record<string, ReactionSummary> = {};
-    (reactions || []).forEach((reaction) => {
+    reactions.forEach((reaction) => {
       const current = summary[reaction.rating_id] || { likes: 0, dislikes: 0, mine: null };
       if (reaction.reaction === "like") current.likes += 1;
       if (reaction.reaction === "dislike") current.dislikes += 1;
-      if (reaction.user_id === user.id) current.mine = reaction.reaction;
+      if (reaction.user_id === user?.id) current.mine = reaction.reaction;
       summary[reaction.rating_id] = current;
     });
     const grouped: Record<string, Comment[]> = {};
-    (commentRows || []).forEach((comment) => {
-      (grouped[comment.rating_id] ||= []).push(comment as unknown as Comment);
+    commentRows.forEach((comment) => {
+      (grouped[comment.rating_id] ||= []).push(comment);
     });
     setReactionSummary(summary);
     setComments(grouped);
+  };
+
+  const reloadSocialData = async () => {
+    if (recentRatings.length === 0) return;
+    const ids = recentRatings.map((rating) => rating.id).join(",");
+    applySocialData(await api<SocialData>(`social?rating_ids=${ids}`));
   };
 
   const toggleReaction = async (ratingId: string, reaction: "like" | "dislike") => {
@@ -138,13 +128,14 @@ export default function Dashboard() {
     setSocialAction(`${ratingId}:${reaction}`);
     setSocialError(null);
     const mine = reactionSummary[ratingId]?.mine;
-    if (mine === reaction) {
-      await supabase.from("reactions").delete().eq("rating_id", ratingId).eq("user_id", user.id);
-    } else {
-      await supabase.from("reactions").upsert({ rating_id: ratingId, user_id: user.id, reaction }, { onConflict: "rating_id,user_id" });
+    try {
+      await api("reactions", { method: "PUT", body: { rating_id: ratingId, reaction: mine === reaction ? null : reaction } });
+      await reloadSocialData();
+    } catch (error) {
+      setSocialError(errorMessage(error, "Your reaction didn’t save. Try again."));
+    } finally {
+      setSocialAction(null);
     }
-    setSocialAction(null);
-    await loadSocialData(recentRatings.map((rating) => rating.id));
   };
 
   const addComment = async (ratingId: string) => {
@@ -153,61 +144,54 @@ export default function Dashboard() {
     if (!content) return;
     setSocialAction(`${ratingId}:comment`);
     setSocialError(null);
-    const { error } = await supabase.from("comments").insert({ rating_id: ratingId, user_id: user.id, content });
-    if (!error) {
+    try {
+      await api("comments", { method: "POST", body: { rating_id: ratingId, content } });
       setCommentDrafts((drafts) => ({ ...drafts, [ratingId]: "" }));
-      await loadSocialData(recentRatings.map((rating) => rating.id));
-    } else {
-      setSocialError("Your comment didn’t post. Try again.");
+      await reloadSocialData();
+    } catch (error) {
+      setSocialError(errorMessage(error, "Your comment didn’t post. Try again."));
+    } finally {
+      setSocialAction(null);
     }
-    setSocialAction(null);
   };
 
   const deleteComment = async (comment: Comment) => {
     if (!user) return;
-    const { error } = await supabase.from("comments").delete().eq("id", comment.id);
-    if (!error) {
+    try {
+      await api(`comments/${comment.id}`, { method: "DELETE" });
       setComments((current) => ({
         ...current,
         [comment.rating_id]: (current[comment.rating_id] || []).filter((item) => item.id !== comment.id),
       }));
-    } else {
-      setSocialError("That comment couldn’t be deleted. Try again.");
+    } catch (error) {
+      setSocialError(errorMessage(error, "That comment couldn’t be deleted. Try again."));
     }
   };
 
-  const fetchRecommendations = async (loggedTmdbIds: Set<number>) => {
+  /** `exclude`: titles not to recommend (already rated by you or recently logged by the group). */
+  const fetchRecommendations = async (exclude: Set<number>) => {
     if (!user) return;
 
     setRecommendationsLoading(true);
     setRecommendationError(null);
 
     try {
-      const [{ data: myRatings }, { data: myTop5 }] = await Promise.all([
-        supabase
-          .from("ratings")
-          .select("rating, movie:movies(tmdb_id, media_type)")
-          .eq("user_id", user.id)
-          .order("rating", { ascending: false })
-          .limit(5),
-        supabase
-          .from("top5_items")
-          .select("rank, movie:movies(tmdb_id, media_type)")
-          .eq("user_id", user.id)
-          .order("rank")
-          .limit(5),
-      ]);
+      const { seeds: allSeeds, dismissed } = await api<{
+        seeds: { tmdb_id: number; media_type: string }[];
+        dismissed: number[];
+      }>("recommendation-seeds");
 
-    const seeds = [...(myRatings || []), ...(myTop5 || [])]
-      .map((row) => row.movie as unknown as { tmdb_id: number; media_type: string } | null)
-      .filter((movie): movie is { tmdb_id: number; media_type: string } => Boolean(movie))
-      .filter((movie, index, all) => all.findIndex((candidate) => candidate.tmdb_id === movie.tmdb_id) === index)
-      .slice(0, 5);
+      const seeds = allSeeds
+        .filter((movie, index, all) => all.findIndex((candidate) => candidate.tmdb_id === movie.tmdb_id) === index)
+        .slice(0, 5);
 
       if (seeds.length === 0) {
         setRecommendationError("Rate a film or add a Top 5 pick to get recommendations.");
         return;
       }
+
+      const hidden = new Set([...dismissedRecommendations, ...dismissed]);
+      setDismissedRecommendations(hidden);
 
       const rotatedSeeds = seeds.length > 1
         ? seeds.map((_, index) => seeds[(index + recommendationOffset) % seeds.length])
@@ -217,7 +201,7 @@ export default function Dashboard() {
       const res = await fetch(`/api/tmdb/Recommendations?tmdb_ids=${seedIds.join(",")}&media_type=${mediaType}&refresh=${Date.now()}`);
       if (!res.ok) throw new Error("Recommendations request failed");
       const data = await res.json();
-      const filtered = (data.results || []).filter((r: SearchResult) => !loggedTmdbIds.has(r.tmdb_id) && !dismissedRecommendations.has(r.tmdb_id));
+      const filtered = (data.results || []).filter((r: SearchResult) => !exclude.has(r.tmdb_id) && !hidden.has(r.tmdb_id));
       setRecommended(filtered.slice(0, 8));
     } catch (error) {
       console.error("Recommendations error:", error);
@@ -238,93 +222,29 @@ export default function Dashboard() {
     if (showLoading) setLoading(true);
     setLoadError(null);
 
-    // Each piece loads independently with its own timeout, so one slow or
-    // broken call (e.g. vercel dev not running) can't freeze the whole page.
-    const withTimeout = <T,>(promise: PromiseLike<T>, ms = 8000): Promise<T | null> =>
-      Promise.race([
-        Promise.resolve(promise),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
-      ]).catch((err) => {
-        console.error(err);
-        return null;
-      });
-
-    const results = await Promise.allSettled([
-      withTimeout(supabase.rpc("get_featured_movie").maybeSingle()),
-      withTimeout(supabase.rpc("get_featured_movies", { limit_count: 8 })),
-      withTimeout(
-        loadRecentRatings()
-      ),
-      withTimeout(
-        supabase.from("movies").select("*").order("created_at", { ascending: false }).limit(12)
-      ),
-      withTimeout(
-        supabase.from("ratings").select("movie:movies(tmdb_id)").eq("user_id", user?.id || "")
-      ),
-    ]);
-
-    const [featuredRes, featuredRowRes, ratingsRes, moviesRes, myRatingsRes] = results;
-
-    if (featuredRes.status === "fulfilled" && featuredRes.value?.data) {
-      setFeatured(featuredRes.value.data as FeaturedMovie);
-    }
-    if (featuredRowRes.status === "fulfilled" && featuredRowRes.value?.data) {
-      setFeaturedRow(featuredRowRes.value.data as FeaturedMovie[]);
-    }
-    if (ratingsRes.status === "fulfilled" && ratingsRes.value) {
-      const ratings = ratingsRes.value as Rating[];
-      setRecentRatings(ratings);
-      const ratedMovies = Array.from(
-        new Map(ratings.map((rating) => [rating.movie.id, rating.movie])).values()
-      );
-      setLoggedMovies(ratedMovies);
-      void loadSocialData(ratings.map((rating) => rating.id));
-    }
-    if (myRatingsRes.status === "fulfilled" && myRatingsRes.value?.data) {
-      setMyRatedTmdbIds(
-        new Set(
-          myRatingsRes.value.data.flatMap((row) => {
-            const movie = row.movie as unknown as { tmdb_id: number } | null;
-            return movie ? [movie.tmdb_id] : [];
-          })
-        )
-      );
-    }
-
-    let moviesData: Movie[] | null = null;
-    if (moviesRes.status === "fulfilled" && moviesRes.value?.data) {
-      moviesData = moviesRes.value.data;
-    }
-
-    // Show the dashboard before slower TMDB feeds finish loading.
-    if (showLoading) setLoading(false);
-
+    let exclude = new Set<number>();
     try {
-      await withTimeout(fetchBoxOffice());
-    } catch (err) {
-      console.error(err);
-    }
-
-    if (moviesData) {
-      // Recommendations hit our own /api proxy (not Supabase), so it gets
-      // its own timeout/error handling separately.
-      try {
-        await withTimeout(fetchRecommendations(new Set(moviesData.map((m) => m.tmdb_id))));
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    const anyFailed = results.some(
-      (r) => r.status === "rejected" || (r.status === "fulfilled" && r.value === null)
-    );
-    if (anyFailed) {
+      const data = await api<HomeData>("home");
+      setFeatured(data.featured);
+      setFeaturedRow(data.featuredRow);
+      setRecentRatings(data.recentRatings);
+      setLoggedMovies(Array.from(new Map(data.recentRatings.map((rating) => [rating.movie.id, rating.movie])).values()));
+      setMyRatedTmdbIds(new Set(data.myRatedTmdbIds));
+      exclude = new Set([...data.recentMovieTmdbIds, ...data.myRatedTmdbIds]);
+      setExcludedTmdbIds(exclude);
+      applySocialData(data);
+    } catch (error) {
+      console.error("Home data error:", error);
       setLoadError(
-        "Some data didn't load — check that both `npx vercel dev` and `npm run dev` are running."
+        errorMessage(error, "Your feed didn’t load. Make sure `npx vercel dev` is running, then refresh.")
       );
     }
 
+    // Show the page before the slower TMDB feeds finish loading.
     if (showLoading) setLoading(false);
+
+    await fetchBoxOffice().catch((error) => console.error(error));
+    await fetchRecommendations(exclude).catch((error) => console.error(error));
   };
 
   useEffect(() => {
@@ -532,7 +452,7 @@ export default function Dashboard() {
               type="button"
               onClick={() => {
                 setRecommendationOffset((offset) => offset + 1);
-                void fetchRecommendations(new Set(loggedMovies.map((movie) => movie.tmdb_id)));
+                void fetchRecommendations(excludedTmdbIds);
               }}
               disabled={recommendationsLoading}
               className="shrink-0 rounded-full border border-line px-4 py-2 text-sm font-semibold text-ink-muted transition-colors hover:border-ink-muted hover:text-ink disabled:cursor-wait disabled:opacity-60"

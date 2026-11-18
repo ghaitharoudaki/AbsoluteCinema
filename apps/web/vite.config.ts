@@ -8,6 +8,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+        // Send the browser's host along so Auth.js builds callback URLs on :5173.
+        xfwd: true,
       },
     },
   },

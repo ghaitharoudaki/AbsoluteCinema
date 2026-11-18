@@ -4,16 +4,22 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "migrate:neon": "node --env-file-if-exists=.env.local scripts/migrate-supabase-to-neon.mjs",
+    "db:schema": "node --env-file-if-exists=.env.local scripts/apply-schema.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "supabase": "^2.113.0"
+    "pg": "^8.23.1"
   },
   "dependencies": {
+    "@auth/core": "^0.41.3",
+    "@neondatabase/serverless": "^1.2.1",
     "@vercel/node": "^5.9.7"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

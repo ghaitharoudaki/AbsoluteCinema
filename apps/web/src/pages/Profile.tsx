@@ -7,7 +7,7 @@ import RateMovie from './RateMovie'
 import Dialog, { CloseButton } from '../components/Dialog'
 import type { SearchResult } from '../components/MovieSearch'
 import { useAuth } from '../lib/AuthContext'
-import { supabase } from '../lib/supabase'
+import { api, ApiError, errorMessage } from '../lib/api'
 
 interface ProfileRow {
   id: string
@@ -43,68 +43,16 @@ interface ProfileRating {
   date_type: 'exact' | 'release' | 'unknown'
 }
 
-function isMissingTop5ItemsError(error: unknown) {
-  if (!error || typeof error !== 'object') return false
-  const message = 'message' in error ? String(error.message) : ''
-  return message.includes('top5_items') && message.includes('schema cache')
-}
-
-async function loadTop5(userId: string): Promise<Top5Movie[]> {
-  const { data, error } = await supabase
-    .from('top5_items')
-    .select('rank, movie_id, movie:movies(tmdb_id, media_type, title, poster_path, release_year)')
-    .eq('user_id', userId)
-    .order('rank')
-
-  if (!error) {
-    return (data ?? []).map((row) => {
-      const movie = row.movie as unknown as {
-        tmdb_id: number
-        media_type: string
-        title: string
-        poster_path: string | null
-        release_year: number | null
-      }
-      return {
-        rank: row.rank,
-        movie_id: row.movie_id,
-        tmdb_id: movie.tmdb_id,
-        media_type: movie.media_type,
-        title: movie.title,
-        poster_path: movie.poster_path,
-        release_year: movie.release_year,
-      }
-    })
-  }
-
-  if (!isMissingTop5ItemsError(error)) return []
-
-  const { data: legacyTop5, error: legacyError } = await supabase
-    .from('top5')
-    .select('movie_ids')
-    .eq('user_id', userId)
-    .maybeSingle()
-
-  if (legacyError || !legacyTop5?.movie_ids?.length) return []
-  const movieIds = legacyTop5.movie_ids as string[]
-
-  const { data: movies } = await supabase
-    .from('movies')
-    .select('id, title, poster_path, release_year, year')
-    .in('id', movieIds)
-
-  const moviesById = new Map((movies ?? []).map((movie) => [movie.id, movie]))
-  return movieIds.flatMap((movieId, index) => {
-    const movie = moviesById.get(movieId)
-    if (!movie) return []
-    return [{
-      rank: index + 1,
-      movie_id: movie.id,
-      title: movie.title,
-      poster_path: movie.poster_path,
-      release_year: movie.release_year ?? movie.year ?? null,
-    }]
-  })
+interface ProfileResponse {
+  profile: ProfileRow
+  top5: Top5Movie[]
+  ratings: ProfileRating[]
+  watchlist: ProfileMovie[]
+  stats: WatchStats
+  favoriteGenre: string | null
+  followers: number
+  following: number
+  isFollowing: boolean
 }
 
 export default function Profile() {
@@ -139,18 +87,17 @@ export default function Profile() {
 
     if (showLoading) setLoading(true)
 
-    const { data: profileData } = await supabase
-      .from('profiles')
-      .select('id, username, display_name, avatar_url, bio')
-      .eq('username', username)
-      .single()
-
-    if (!profileData) {
+    let data: ProfileResponse
+    try {
+      data = await api<ProfileResponse>(`profiles/${encodeURIComponent(username)}`)
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 404)) console.error('Profile load failed:', error)
       setProfile(null)
       setLoading(false)
       return
     }
 
+    const profileData = data.profile
     setProfile(profileData)
     setProfileForm({
       display_name: profileData.display_name ?? '',
@@ -158,64 +105,11 @@ export default function Profile() {
       bio: profileData.bio ?? '',
       avatar_url: profileData.avatar_url ?? '',
     })
-    if (showLoading) setLoading(false)
 
-    const [
-      top5Res,
-      recentRes,
-      watchlistRes,
-      statsRes,
-      genreRes,
-      followersRes,
-      followingRes,
-      followCheckRes,
-    ] = await Promise.all([
-      loadTop5(profileData.id),
-      supabase
-        .from('ratings')
-        .select('id, rating, description, watched_date, date_type, movie:movies(id, tmdb_id, title, poster_path, release_year, media_type)')
-        .eq('user_id', profileData.id)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('watchlist')
-        .select('movie:movies(id, tmdb_id, title, poster_path, release_year, media_type)')
-        .eq('user_id', profileData.id)
-        .order('created_at', { ascending: false })
-        .limit(10),
-      supabase
-        .from('user_watch_stats')
-        .select('movie_hours, series_hours, movie_count, series_count')
-        .eq('user_id', profileData.id)
-        .maybeSingle(),
-      supabase.rpc('get_favorite_genre', { p_user_id: profileData.id }),
-      supabase
-        .from('follows')
-        .select('*', { count: 'exact', head: true })
-        .eq('following_id', profileData.id),
-      supabase
-        .from('follows')
-        .select('*', { count: 'exact', head: true })
-        .eq('follower_id', profileData.id),
-      user && user.id !== profileData.id
-        ? supabase
-            .from('follows')
-            .select('follower_id')
-            .eq('follower_id', user.id)
-            .eq('following_id', profileData.id)
-            .maybeSingle()
-        : Promise.resolve({ data: null }),
-    ])
-
-    setTop5(top5Res)
-    const ratedMovies = (recentRes.data ?? []).flatMap((row) =>
-      row.movie ? [{ ...(row.movie as unknown as ProfileMovie), rating: Number(row.rating) }] : []
-    )
-    setRatings(
-      (recentRes.data ?? []).flatMap((row) =>
-        row.movie ? [{ ...row, movie: row.movie as unknown as ProfileMovie } as ProfileRating] : []
-      )
-    )
-    const top5Movies: ProfileMovie[] = top5Res.map((movie) => ({
+    setTop5(data.top5)
+    setRatings(data.ratings)
+    const ratedMovies = data.ratings.map((row) => ({ ...row.movie, rating: Number(row.rating) }))
+    const top5Movies: ProfileMovie[] = data.top5.map((movie) => ({
       id: movie.movie_id,
       tmdb_id: movie.tmdb_id ?? 0,
       title: movie.title,
@@ -224,28 +118,18 @@ export default function Profile() {
       media_type: movie.media_type ?? 'movie',
       rating: undefined,
     }))
-    const recentlyWatched = [...ratedMovies, ...top5Movies]
-      .filter((movie, index, movies) => movies.findIndex((item) => item.id === movie.id) === index)
-    setRecentMovies(recentlyWatched)
-    setWatchlist(
-      (watchlistRes.data ?? []).flatMap((row) => (row.movie ? [row.movie as unknown as ProfileMovie] : []))
+    setRecentMovies(
+      [...ratedMovies, ...top5Movies].filter((movie, index, movies) => movies.findIndex((item) => item.id === movie.id) === index),
     )
-
-    setStats(
-      statsRes.data ?? {
-        movie_hours: 0,
-        series_hours: 0,
-        movie_count: 0,
-        series_count: 0,
-      }
-    )
-    setFavoriteGenre(typeof genreRes.data === 'string' ? genreRes.data : null)
-    setFollowers(followersRes.count ?? 0)
-    setFollowing(followingRes.count ?? 0)
-    setIsFollowing(!!followCheckRes.data)
+    setWatchlist(data.watchlist)
+    setStats(data.stats)
+    setFavoriteGenre(data.favoriteGenre)
+    setFollowers(data.followers)
+    setFollowing(data.following)
+    setIsFollowing(data.isFollowing)
 
     setLoading(false)
-  }, [username, user])
+  }, [username])
 
   useEffect(() => {
     loadProfile()
@@ -257,21 +141,16 @@ export default function Profile() {
     setFollowLoading(true)
     try {
       if (isFollowing) {
-        await supabase
-          .from('follows')
-          .delete()
-          .eq('follower_id', user.id)
-          .eq('following_id', profile.id)
+        await api(`follows/${profile.id}`, { method: 'DELETE' })
         setIsFollowing(false)
         setFollowers((count) => Math.max(0, count - 1))
       } else {
-        await supabase.from('follows').insert({
-          follower_id: user.id,
-          following_id: profile.id,
-        })
+        await api(`follows/${profile.id}`, { method: 'PUT' })
         setIsFollowing(true)
         setFollowers((count) => count + 1)
       }
+    } catch (error) {
+      console.error('Follow failed:', error)
     } finally {
       setFollowLoading(false)
     }
@@ -281,35 +160,34 @@ export default function Profile() {
     if (!profile) return
     setProfileSaving(true)
     setProfileError(null)
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({
-        display_name: profileForm.display_name.trim() || null,
-        username: profileForm.username.trim(),
-        bio: profileForm.bio.trim() || null,
-        avatar_url: profileForm.avatar_url.trim() || null,
+    try {
+      const { profile: saved } = await api<{ profile: ProfileRow }>('profile', {
+        method: 'PATCH',
+        body: {
+          display_name: profileForm.display_name,
+          username: profileForm.username,
+          bio: profileForm.bio,
+          avatar_url: profileForm.avatar_url,
+        },
       })
-      .eq('id', profile.id)
-      .select('id, username, display_name, avatar_url, bio')
-      .single()
-    setProfileSaving(false)
-    if (error) {
-      setProfileError(
-        error.code === '23505'
-          ? 'That username is taken. Try another one.'
-          : `Your profile didn't save: ${error.message}`,
-      )
-      return
+      setProfile(saved)
+      setEditingProfile(false)
+      if (saved.username !== username) navigate(`/profile/${saved.username}`, { replace: true })
+    } catch (error) {
+      setProfileError(errorMessage(error, "Your profile didn't save. Try again."))
+    } finally {
+      setProfileSaving(false)
     }
-    setProfile(data)
-    setEditingProfile(false)
-    if (data.username !== username) navigate(`/profile/${data.username}`, { replace: true })
   }
 
   const removeFromWatchlist = async (movieId: string) => {
     if (!user || !isOwnProfile) return
-    const { error } = await supabase.from('watchlist').delete().eq('user_id', user.id).eq('movie_id', movieId)
-    if (!error) setWatchlist((movies) => movies.filter((movie) => movie.id !== movieId))
+    try {
+      await api(`watchlist/${movieId}`, { method: 'DELETE' })
+      setWatchlist((movies) => movies.filter((movie) => movie.id !== movieId))
+    } catch (error) {
+      console.error('Watchlist removal failed:', error)
+    }
   }
 
   if (loading) {
@@ -461,7 +339,7 @@ export default function Profile() {
             </div>
             {isOwnProfile && <span className="shrink-0 text-sm text-ink-muted tabular">{top5.length} of 5 picked</span>}
           </div>
-          <Top5Picker items={top5} editable={isOwnProfile} userId={profile.id} onSaved={() => void loadProfile(false)} />
+          <Top5Picker items={top5} editable={isOwnProfile} onSaved={() => void loadProfile(false)} />
         </section>
 
         <MovieShelf

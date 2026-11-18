@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import MovieSearch, { type SearchResult } from './MovieSearch'
 import { ensureMovieInDb } from '../lib/movies'
-import { supabase } from '../lib/supabase'
+import { api, errorMessage } from '../lib/api'
 import Dialog, { CloseButton } from './Dialog'
 
 export interface Top5Movie {
@@ -18,18 +18,11 @@ interface Top5PickerProps {
   items: Top5Movie[]
   editable: boolean
   onSaved: () => void
-  userId: string
 }
 
 const POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w300'
 
-function isMissingTop5ItemsError(error: unknown) {
-  if (!error || typeof error !== 'object') return false
-  const message = 'message' in error ? String(error.message) : ''
-  return message.includes('top5_items') && message.includes('schema cache')
-}
-
-export default function Top5Picker({ items, editable, onSaved, userId }: Top5PickerProps) {
+export default function Top5Picker({ items, editable, onSaved }: Top5PickerProps) {
   const [draft, setDraft] = useState<Top5Movie[]>(items)
   const [activeSlot, setActiveSlot] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
@@ -49,44 +42,14 @@ export default function Top5Picker({ items, editable, onSaved, userId }: Top5Pic
     setError(null)
 
     try {
-      const { error: deleteError } = await supabase.from('top5_items').delete().eq('user_id', userId)
-      if (deleteError && !isMissingTop5ItemsError(deleteError)) throw deleteError
-
-      if (!deleteError && nextDraft.length > 0) {
-        const { error: insertError } = await supabase.from('top5_items').insert(
-          nextDraft.map((item) => ({
-            user_id: userId,
-            rank: item.rank,
-            movie_id: item.movie_id,
-          }))
-        )
-        if (insertError) throw insertError
-      }
-
-      if (deleteError && isMissingTop5ItemsError(deleteError)) {
-        const { error: legacyError } = await supabase.from('top5').upsert(
-          {
-            user_id: userId,
-            movie_ids: nextDraft.map((item) => item.movie_id),
-          },
-          { onConflict: 'user_id' }
-        )
-        if (legacyError) {
-          if (String(legacyError.message).includes('movie_ids')) {
-            throw new Error('Top 5 database is outdated. Apply migration 00004_profile_features.sql in Supabase.')
-          }
-          throw legacyError
-        }
-      }
-
+      await api('top5', {
+        method: 'PUT',
+        body: { items: nextDraft.map((item) => ({ rank: item.rank, movie_id: item.movie_id })) },
+      })
       onSaved()
     } catch (saveError) {
       console.error('Top 5 save error:', saveError)
-      const message =
-        typeof saveError === 'object' && saveError !== null && 'message' in saveError
-          ? ` ${String(saveError.message)}`
-          : ''
-      setError(`Could not save your top 5.${message}`)
+      setError(errorMessage(saveError, "Your Top 5 didn't save. Try again."))
     } finally {
       setSaving(false)
     }

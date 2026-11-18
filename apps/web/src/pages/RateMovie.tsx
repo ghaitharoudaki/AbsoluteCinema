@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
+import { api, ApiError, errorMessage } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import type { SearchResult } from '../components/MovieSearch'
 import StarRating from '../components/StarRating'
@@ -65,42 +65,29 @@ export default function RateMovie({ movie, onDone, onCancel, existingRating }: R
 
     try {
       const movieId = await ensureMovieInDb(movie, details)
-      const { data: existingRatingRow, error: existingRatingError } = await supabase
-        .from('ratings')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('movie_id', movieId)
-        .maybeSingle()
-
-      if (existingRatingError) throw existingRatingError
-      if (existingRatingRow && !existingRating) {
-        setError('You already logged this title. Choose another movie.')
-        return
-      }
-
       const watchedDate =
         dateMode === 'exact' ? exactDate : dateMode === 'release' ? details?.release_date ?? null : null
 
-      const ratingPayload = {
-        user_id: user.id,
-        movie_id: movieId,
-        rating,
-        description: description.trim() || null,
-        watched_date: watchedDate,
-        date_type: dateMode,
-      }
-      const { error: ratingError } = existingRating
-        ? await supabase.from('ratings').update(ratingPayload).eq('id', existingRating.id)
-        : await supabase.from('ratings').insert(ratingPayload)
-
-      if (ratingError) throw ratingError
+      await api('ratings', {
+        method: 'POST',
+        body: {
+          id: existingRating?.id,
+          movie_id: movieId,
+          rating,
+          description: description.trim() || null,
+          watched_date: watchedDate,
+          date_type: dateMode,
+        },
+      })
 
       onDone()
     } catch (err) {
       console.error(err)
-      const message =
-        typeof err === 'object' && err !== null && 'message' in err ? ` ${String(err.message)}` : ''
-      setError(`Could not log that title.${message}`)
+      setError(
+        err instanceof ApiError && err.code === 'already_rated'
+          ? 'You already logged this title. Edit your rating from your profile instead.'
+          : errorMessage(err, "That didn't save. Check your connection and try again."),
+      )
     } finally {
       setSubmitting(false)
     }

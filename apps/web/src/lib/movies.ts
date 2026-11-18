@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { api } from './api'
 import type { SearchResult } from '../components/MovieSearch'
 
 interface MovieDetails {
@@ -46,21 +46,7 @@ export async function ensureMovieInDb(
     genres: resolved?.genres ?? null,
   }
 
-  const { data: existingMovie, error: lookupError } = await supabase
-    .from('movies')
-    .select('id')
-    .eq('tmdb_id', movie.tmdb_id)
-    .maybeSingle()
-
-  if (lookupError) throw lookupError
-  if (existingMovie) return String(existingMovie.id)
-
-  const { data, error } = await supabase
-    .from('movies')
-    .insert(moviePayload)
-    .select('id')
-    .single()
-
-  if (error) throw error
-  return String(data.id)
+  // The server inserts the title if it's new and returns the existing id otherwise.
+  const { id } = await api<{ id: string }>('movies', { method: 'POST', body: moviePayload })
+  return id
 }

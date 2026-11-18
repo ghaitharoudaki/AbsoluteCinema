@@ -1,127 +1,109 @@
-# Database Setup Guide
+# Database & sign-in setup (Neon + Auth.js)
 
-The app now has the complete backend wired up. Here's how to apply the database migrations:
+AbsoluteCinema stores its data in **Neon** (serverless Postgres) and signs people in with
+**Auth.js** using Google. The browser never talks to the database: every read and write goes
+through `/api/app/*`, which checks the signed-in user first.
 
-## Step 1: Verify Supabase Connection
+| Piece | Where |
+|---|---|
+| Schema | `db/schema.sql` |
+| Sign-in (Auth.js, Google) | `api/auth.ts`, `api/_lib/auth.ts` |
+| Data API | `api/app.ts` |
+| Browser client | `apps/web/src/lib/api.ts` |
+| One-time Supabase import | `scripts/migrate-supabase-to-neon.mjs` |
 
-Make sure your `.env.local` (or `.env`) has your Supabase credentials:
-```
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
-```
+## 1. Create the Neon database
 
-## Step 2: Apply Migrations
-
-You have two options:
-
-### Option A: Using Supabase CLI (Recommended)
-
-1. **Install/update Supabase CLI:**
+1. Sign up at <https://neon.tech> and create a project (the free plan is enough).
+2. **Connect** → copy the connection string.
+3. Copy `.env.example` to `.env.local` at the repo root and paste it as `DATABASE_URL`.
+4. Create the tables:
    ```bash
-   npm install -g supabase
-   # or if you already have it:
-   supabase --version
+   npm install
+   npm run db:schema
    ```
 
-2. **Link your project to Supabase:**
+## 2. Create the Google sign-in client
+
+1. Google Cloud Console → **APIs & Services → Credentials → Create credentials → OAuth client ID**
+   (type: *Web application*).
+2. **Authorized redirect URIs** — add both:
+   - `http://localhost:5173/api/auth/callback/google`
+   - `https://<your-vercel-domain>/api/auth/callback/google`
+3. Put the client ID and secret in `.env.local` as `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET`.
+4. Generate a session secret and save it as `AUTH_SECRET`:
    ```bash
-   supabase link --project-ref your-project-ref
+   npx auth secret
    ```
-   (Find your project ref at https://app.supabase.com/project/[project-ref]/settings)
 
-3. **Push the migrations:**
+## 3. Move your existing data from Supabase (one time)
+
+Skip this if you're starting fresh.
+
+1. Supabase dashboard → **Connect** → copy the **Session pooler** URI (the direct
+   `db.<ref>.supabase.co` host is IPv6-only and often unreachable). Put it in `.env.local` as
+   `SUPABASE_DB_URL`.
+2. Run:
    ```bash
-   supabase db push
+   npm run migrate:neon
    ```
-   This will automatically run both `00001_initial_schema.sql` and `00002_rpc_functions.sql`.
 
-### Option B: Manual via Supabase Dashboard
+What it does:
+- Copies profiles, movies, ratings, follows, Top 5s, watchlists, reactions, comments and
+  recommendation feedback, **keeping every id** so all links survive.
+- Copies each person's Google email from Supabase Auth onto their profile. When they sign in
+  with Google through Auth.js they're matched by that email and land on their existing profile.
+- Converts the old `top5` array table to `top5_items` if you still have it.
+- Checks the id column types first and stops without writing anything if they don't match.
+- Runs in one transaction (all or nothing) and can be re-run safely. Supabase is only read.
 
-1. Go to https://app.supabase.com
-2. Select your project
-3. Go to **SQL Editor**
-4. Click **New Query**
-5. Copy the contents of `supabase/migrations/00001_initial_schema.sql`
-6. Click **Run**
-7. Repeat for `supabase/migrations/00002_rpc_functions.sql`
+If it lists profiles with no email (their Supabase login was deleted), set `profiles.email`
+for them in Neon's SQL editor if they should be able to sign in.
 
-## Step 3: Create a Test Profile (One-time only)
+After everyone has signed in successfully you can delete `SUPABASE_DB_URL` and shut the
+Supabase project down.
 
-When you first log in via Google OAuth, the app auto-creates a profile. But to test, you can manually create one:
+## 4. Run locally
 
-```sql
--- Run this in Supabase SQL Editor to create a test user profile
-INSERT INTO profiles (id, username, display_name, avatar_url)
-VALUES (
-  auth.uid(),  -- This gets YOUR logged-in user's ID
-  'you',
-  'Your Name',
-  'https://example.com/avatar.jpg'
-)
-ON CONFLICT (id) DO NOTHING;
-```
-
-## Step 4: Start the Dev Server
+Two terminals:
 
 ```bash
-cd apps/web
-npm install  # if you haven't already
-npm run dev
+# repo root: API functions on :3000
+npx vercel dev
+
+# apps/web: the app on :5173 (proxies /api to :3000)
+cd apps/web && npm run dev
 ```
 
-Then:
-1. Go to http://localhost:5173
-2. Click **Continue with Google**
-3. Search for a movie (try "Inception" or "The Matrix")
-4. Rate it 1-10
-5. Click **Save rating**
-6. Return to home — you should see the movie in your dashboard!
+Open <http://localhost:5173> and choose **Continue with Google**.
 
-## What's Now Functional
+## 5. Deploy on Vercel
 
-✅ **Search movies** — Uses TMDB API to find movies/shows  
-✅ **Rate movies** — 1-10 slider, optional review text, watched date  
-✅ **Dashboard** — Shows:
-- Logged titles count
-- Recent activity feed
-- Poster grid of what the squad is watching
-- Featured movie spotlight
-- Stats: recent findings, hot takes count
+Add these under **Settings → Environment Variables**: `DATABASE_URL`, `AUTH_SECRET`,
+`AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `TMDB_API_KEY`. Remove the old `VITE_SUPABASE_*` ones.
+`vercel.json` routes `/api/auth/*` and `/api/app/*` to their functions; the project runs on
+Node 24 (set in the root `package.json`).
 
-✅ **Database** — Fully relational schema with:
-- User profiles (auto-synced with Google OAuth)
-- Movies (TMDB metadata cached)
-- Ratings (unique per user-movie pair)
-- RLS policies (only authenticated users can view/edit)
-- RPC functions for aggregations
+## Who can do what
+
+Supabase enforced this with row-level security; now `api/app.ts` does:
+
+- Anyone signed in can see profiles, ratings, Top 5s, watchlists, follows, reactions and comments.
+- Only you can change your ratings, Top 5, watchlist, reactions, follows, profile and hidden
+  recommendations.
+- A comment can be deleted by whoever wrote it or by the owner of the rating it's on.
 
 ## Troubleshooting
 
-**"get_featured_movie is not a function"** or RPC error:
-- Migrations didn't apply. Run `supabase db push` or manually run `00002_rpc_functions.sql` in the SQL Editor.
+**Sign-in returns to the login page with an error** — the redirect URI in Google Cloud must match
+exactly, including the port. Check `AUTH_SECRET` is set.
 
-**Can't save ratings:**
-- Check the browser console (F12) for error messages
-- Verify you're logged in (check Supabase Auth dashboard)
-- Make sure migrations were fully applied
+**"Sign in to continue" on every request** — the session cookie isn't reaching the API. Make sure
+you open the app on `localhost:5173` (not `127.0.0.1`) and that `npx vercel dev` is running.
 
-**Movies not showing in search:**
-- Check that TMDB_API_KEY is set in `.env`
-- Check browser console for fetch errors
-- Verify the API endpoint `/api/tmdb/search` is being hit (Network tab in DevTools)
+**"Your feed didn't load"** — `DATABASE_URL` is missing or wrong, or `npm run db:schema` wasn't run.
 
-**See "Cannot GET /api/tmdb/search":**
-- You need to deploy the `api/` folder to Vercel, or use a local proxy
-- For local development, you may need to set up environment variables differently
+**Search or posters fail** — `TMDB_API_KEY` is missing.
 
-## Next Steps (Features to Build)
-
-Once this is working, the roadmap is:
-1. **Browse page** (`/browse`) — Grid of all group movies with filters
-2. **Profile page** (`/profile/:username`) — User profile, Top 5, stats
-3. **Hot Take detector** — Flag ratings ≥3 points off group average
-4. **Prediction game** — Guess group average before rating
-5. **Compatibility %** — See how much your taste aligns with each friend
-6. ...and 9 more features in the project brief
-
-See `copilot-instructions.md` section 6 for the full feature roadmap.
+The old `supabase/migrations` folder is kept for history only; `db/schema.sql` is now the source
+of truth.

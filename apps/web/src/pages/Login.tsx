@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { Navigate } from 'react-router-dom'
+import { useAuth } from '../lib/AuthContext'
+import { signInWithGoogle } from '../lib/api'
 
 const SAMPLE_LOGS = [
   { who: 'Sam', title: 'Past Lives', score: '9.0', note: 'Quietly wrecked me.' },
@@ -8,18 +10,25 @@ const SAMPLE_LOGS = [
 ]
 
 export default function Login() {
+  const { user, loading } = useAuth()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Auth.js sends people back here with ?error=... when Google sign-in fails.
+  const authError = new URLSearchParams(window.location.search).get('error')
 
   const handleGoogleLogin = async () => {
     setPending(true)
     setError(null)
-    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' })
-    if (error) {
-      setError(`Google sign-in didn't start: ${error.message}. Try again.`)
+    try {
+      await signInWithGoogle('/')
+    } catch {
+      setError("Google sign-in didn't start. Check your connection and try again.")
       setPending(false)
     }
   }
+
+  if (!loading && user) return <Navigate to="/" replace />
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
@@ -66,7 +75,7 @@ export default function Login() {
           </button>
 
           <p role="alert" className="mt-4 min-h-[1.25rem] text-sm text-danger">
-            {error}
+            {error ?? (authError ? 'Google sign-in was cancelled or failed. Try again.' : null)}
           </p>
         </section>
       </div>

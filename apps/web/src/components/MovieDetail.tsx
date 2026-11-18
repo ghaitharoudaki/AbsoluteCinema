@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
+import { api, ApiError, errorMessage } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import type { SearchResult } from '../components/MovieSearch'
 import { ensureMovieInDb, fetchMovieDetails } from '../lib/movies'
@@ -65,46 +65,16 @@ export default function MovieDetail({ movie, onRate, onClose, alreadyRated = fal
 
     try {
       const movieId = await ensureMovieInDb(movie, details)
-      const { data: existingRating, error: ratingLookupError } = await supabase
-        .from('ratings')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('movie_id', movieId)
-        .maybeSingle()
-
-      if (ratingLookupError) throw ratingLookupError
-      if (existingRating) {
-        setWatchlistState('idle')
-        setWatchlistMessage("You've already logged this, so it stays off your watchlist.")
-        return
-      }
-
-      const { data: existingWatchlist, error: watchlistLookupError } = await supabase
-        .from('watchlist')
-        .select('movie_id')
-        .eq('user_id', user.id)
-        .eq('movie_id', movieId)
-        .maybeSingle()
-
-      if (watchlistLookupError) throw watchlistLookupError
-      if (existingWatchlist) {
-        setWatchlistState('added')
-        return
-      }
-
-      const { error: watchlistError } = await supabase
-        .from('watchlist')
-        .insert({ user_id: user.id, movie_id: movieId })
-
-      if (watchlistError) throw watchlistError
-
+      await api('watchlist', { method: 'POST', body: { movie_id: movieId } })
       setWatchlistState('added')
     } catch (err) {
       console.error(err)
       setWatchlistState('idle')
-      const message =
-        typeof err === 'object' && err !== null && 'message' in err ? ` ${String(err.message)}` : ''
-      setWatchlistMessage(`Couldn't add it to your watchlist.${message || ' Try again.'}`)
+      setWatchlistMessage(
+        err instanceof ApiError && err.code === 'already_rated'
+          ? "You've already logged this, so it stays off your watchlist."
+          : errorMessage(err, "Couldn't add it to your watchlist. Try again."),
+      )
     }
   }
 

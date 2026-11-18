@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link, NavLink } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import { useTheme } from '../lib/ThemeContext'
-import { supabase } from '../lib/supabase'
+import { api } from '../lib/api'
 
 interface NavBarProps {
   onSearch?: () => void
@@ -17,18 +17,16 @@ const iconButton =
   'flex h-9 w-9 items-center justify-center rounded-full text-ink-muted transition-colors hover:bg-raised hover:text-ink'
 
 export default function NavBar({ onSearch }: NavBarProps) {
-  const { user } = useAuth()
+  const { user, signOut } = useAuth()
   const { theme, toggle } = useTheme()
+  const navigate = useNavigate()
   const [profile, setProfile] = useState<{ username: string; avatar_url: string | null } | null>(null)
 
   useEffect(() => {
     if (!user) return
-    supabase
-      .from('profiles')
-      .select('username, avatar_url')
-      .eq('id', user.id)
-      .maybeSingle()
-      .then(({ data }) => setProfile(data))
+    api<{ profile: { username: string; avatar_url: string | null } }>('me')
+      .then(({ profile }) => setProfile(profile))
+      .catch((error) => console.error('Profile lookup failed:', error))
   }, [user])
 
   const initial = (profile?.username || user?.email || '?').charAt(0).toUpperCase()
@@ -96,7 +94,7 @@ export default function NavBar({ onSearch }: NavBarProps) {
           </NavLink>
         )}
 
-        <button type="button" onClick={() => void supabase.auth.signOut()} aria-label="Sign out" title="Sign out" className={iconButton}>
+        <button type="button" onClick={() => void signOut().then(() => navigate('/login', { replace: true }))} aria-label="Sign out" title="Sign out" className={iconButton}>
           <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 17l5-5-5-5M20 12H9M12 21H5a2 2 0 01-2-2V5a2 2 0 012-2h7" />
           </svg>

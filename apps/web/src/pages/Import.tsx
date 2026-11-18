@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import NavBar from '../components/NavBar'
 import { useAuth } from '../lib/AuthContext'
-import { supabase } from '../lib/supabase'
+import { api, ApiError } from '../lib/api'
 import { ensureMovieInDb } from '../lib/movies'
 import type { SearchResult } from '../components/MovieSearch'
 
@@ -124,12 +124,9 @@ export default function Import() {
 
   useEffect(() => {
     if (!user) return
-    supabase
-      .from('profiles')
-      .select('username')
-      .eq('id', user.id)
-      .maybeSingle()
-      .then(({ data }) => setProfileUsername(data?.username ?? null))
+    api<{ profile: { username: string } }>('me')
+      .then(({ profile }) => setProfileUsername(profile.username))
+      .catch(() => setProfileUsername(null))
   }, [user])
 
   const readFile = (file: File, source: ImportRow['source']) => {
@@ -174,37 +171,32 @@ export default function Import() {
     try {
       for (const row of rows.filter((item) => item.matchState === 'matched' && item.match)) {
         const movieId = await ensureMovieInDb(row.match!, null, false)
+        // 409 means it's already logged (or, for the watchlist, already rated): skip it.
+        const isConflict = (error: unknown) => error instanceof ApiError && error.status === 409
         if (row.source === 'rating' && row.rating !== null) {
-          const { data: existing, error: lookupError } = await supabase
-            .from('ratings')
-            .select('id')
-            .eq('user_id', user.id)
-            .eq('movie_id', movieId)
-            .maybeSingle()
-          if (lookupError) throw lookupError
-          if (existing) {
-            skipped += 1
-          } else {
-            const { error: insertError } = await supabase.from('ratings').insert({
-              user_id: user.id,
-              movie_id: movieId,
-              rating: row.rating,
-              watched_date: row.watchedDate,
-              date_type: row.watchedDate ? 'exact' : 'unknown',
-              description: `Imported from ${row.provider === 'simkl' ? 'Simkl' : 'Letterboxd'}`,
+          try {
+            await api('ratings', {
+              method: 'POST',
+              body: {
+                movie_id: movieId,
+                rating: row.rating,
+                watched_date: row.watchedDate,
+                date_type: row.watchedDate ? 'exact' : 'unknown',
+                description: `Imported from ${row.provider === 'simkl' ? 'Simkl' : 'Letterboxd'}`,
+              },
             })
-            if (insertError) throw insertError
             ratings += 1
+          } catch (error) {
+            if (!isConflict(error)) throw error
+            skipped += 1
           }
         } else {
-          const { error: watchlistError } = await supabase.from('watchlist').upsert(
-            { user_id: user.id, movie_id: movieId },
-            { onConflict: 'user_id,movie_id', ignoreDuplicates: true },
-          )
-          if (watchlistError) {
-            skipped += 1
-          } else {
+          try {
+            await api('watchlist', { method: 'POST', body: { movie_id: movieId } })
             watchlist += 1
+          } catch (error) {
+            if (!isConflict(error)) throw error
+            skipped += 1
           }
         }
       }
@@ -212,7 +204,7 @@ export default function Import() {
       setSummary({ ratings, watchlist, skipped })
     } catch (importError) {
       console.error(importError)
-      setError('The import stopped before all rows were applied. Check your database connection and try again.')
+      setError('The import stopped partway. Titles already added stay added; run it again to finish the rest.')
     } finally {
       setImporting(false)
     }
