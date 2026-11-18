@@ -37,8 +37,11 @@ export default function Dialog({
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null
     const panel = panelRef.current
-    const firstField = panel?.querySelector<HTMLElement>('input, textarea, select')
-    ;(firstField ?? panel)?.focus()
+    // On touch screens focusing a field pops the keyboard over the dialog, so focus the panel instead.
+    // Fields that really want the keyboard (search) use their own autoFocus.
+    const touch = window.matchMedia('(pointer: coarse)').matches
+    const firstField = touch ? null : panel?.querySelector<HTMLElement>('input, textarea, select')
+    ;(firstField ?? panel)?.focus({ preventScroll: true })
 
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {

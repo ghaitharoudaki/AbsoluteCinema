@@ -748,10 +748,13 @@ const searchPeople: Handler = async ({ user, url }) => {
   const q = (url.searchParams.get('q') || '').trim().slice(0, 50)
   const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`)
   const rows = await db().query(
-    `SELECT ${peopleColumns}
-     FROM profiles p
-     WHERE p.id <> $1 AND ($2 = '' OR p.username ILIKE $3 OR p.display_name ILIKE $3)
-     ORDER BY ($2 <> '' AND p.username ILIKE $4) DESC, (follows_you AND NOT is_following) DESC, is_following ASC, followers DESC, p.username
+    // Wrapped in a subquery: Postgres can't use output aliases (follows_you…) inside ORDER BY expressions.
+    `SELECT * FROM (
+       SELECT ${peopleColumns}, (p.username ILIKE $4) AS prefix_match
+       FROM profiles p
+       WHERE p.id <> $1 AND ($2 = '' OR p.username ILIKE $3 OR p.display_name ILIKE $3)
+     ) x
+     ORDER BY ($2 <> '' AND x.prefix_match) DESC, (x.follows_you AND NOT x.is_following) DESC, x.is_following ASC, x.followers DESC, x.username
      LIMIT 30`,
     [user.id, q, `%${escaped}%`, `${escaped}%`],
   )
