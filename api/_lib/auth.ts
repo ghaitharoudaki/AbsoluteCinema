@@ -1,6 +1,6 @@
 import { Auth, type AuthConfig } from '@auth/core'
 import Google from '@auth/core/providers/google'
-import { db } from './db'
+import { db } from './db.js'
 
 declare module '@auth/core/types' {
   interface Session {

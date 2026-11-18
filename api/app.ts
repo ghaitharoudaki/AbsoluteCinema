@@ -1,5 +1,5 @@
-import { db, pgErrorCode } from './_lib/db'
-import { getSessionUser, type SessionUser } from './_lib/auth'
+import { db, pgErrorCode } from './_lib/db.js'
+import { getSessionUser, type SessionUser } from './_lib/auth.js'
 
 /*
  * Data API for the web app. Every /api/app/* path is rewritten here (vercel.json)
