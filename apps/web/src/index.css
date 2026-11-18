@@ -1,111 +1,152 @@
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=Figtree:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Palette — "movie palace at night"
+ * Light (matinee): cool paper, deep ink, darker velvet red for contrast.
+ * Dark (screening): midnight-blue walls, ivory-blue text, velvet-seat red.
+ */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
-
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  --canvas: 244 246 250;      /* #F4F6FA */
+  --surface: 255 255 255;     /* #FFFFFF */
+  --raised: 234 237 245;      /* #EAEDF5 */
+  --line: 214 219 232;        /* #D6DBE8 */
+  --ink: 19 26 46;            /* #131A2E */
+  --ink-muted: 84 95 125;     /* #545F7D */
+  --brand: 212 47 74;         /* #D42F4A */
+  --brand-hover: 184 32 58;   /* #B8203A */
+  --on-brand: 255 255 255;
+  --danger: 190 30 45;
+  --success: 22 128 84;
+  --shadow: 19 26 46;
+  color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+.dark {
+  --canvas: 14 20 36;         /* #0E1424 */
+  --surface: 22 30 51;        /* #161E33 */
+  --raised: 31 41 67;         /* #1F2943 */
+  --line: 44 55 86;           /* #2C3756 */
+  --ink: 238 241 248;         /* #EEF1F8 */
+  --ink-muted: 148 160 188;   /* #94A0BC */
+  --brand: 255 77 106;        /* #FF4D6A */
+  --brand-hover: 255 112 135; /* #FF7087 */
+  --on-brand: 14 20 36;
+  --danger: 255 122 122;
+  --success: 92 214 160;
+  --shadow: 2 4 12;
+  color-scheme: dark;
 }
 
+html,
+body,
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  min-height: 100%;
 }
 
 body {
-  margin: 0;
+  background-color: rgb(var(--canvas));
+  color: rgb(var(--ink));
+  font-family: 'Figtree', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
 h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+h2,
+h3 {
+  text-wrap: balance;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
+.font-display {
+  letter-spacing: 0.01em;
+  line-height: 1;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
+/* Scores and counts line up in columns */
+.font-mono,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Ticket stub — the one bold element. Every score is drawn as the
+ * admission ticket it records. Side notches are cut with a radial mask.
+ */
+.ticket {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.22em 0.75em 0.16em;
+  font-family: 'Big Shoulders Display', Impact, sans-serif;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: rgb(var(--on-brand));
+  background: rgb(var(--brand));
   border-radius: 4px;
-  color: var(--text-h);
+  -webkit-mask:
+    radial-gradient(circle at 0 50%, transparent 0.3em, #000 0.32em) left / 51% 100% no-repeat,
+    radial-gradient(circle at 100% 50%, transparent 0.3em, #000 0.32em) right / 51% 100% no-repeat;
+  mask:
+    radial-gradient(circle at 0 50%, transparent 0.3em, #000 0.32em) left / 51% 100% no-repeat,
+    radial-gradient(circle at 100% 50%, transparent 0.3em, #000 0.32em) right / 51% 100% no-repeat;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.ticket-soft {
+  color: rgb(var(--brand));
+  background: rgb(var(--brand) / 0.15);
+}
+
+/* Loading placeholder */
+.skeleton {
+  background: linear-gradient(90deg, rgb(var(--raised)) 0%, rgb(var(--line) / 0.8) 50%, rgb(var(--raised)) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Horizontal poster rails: snap, hide the bar but keep them scrollable */
+.rail {
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+.rail::-webkit-scrollbar {
+  display: none;
+}
+.rail > * {
+  scroll-snap-align: start;
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--brand));
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-color: rgb(var(--line)) transparent;
+  scrollbar-width: thin;
+}
+
+::selection {
+  background: rgb(var(--brand) / 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

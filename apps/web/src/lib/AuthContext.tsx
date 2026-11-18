@@ -19,18 +19,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let mounted = true
+    const timeout = setTimeout(() => {
+      if (mounted && loading) {
+        console.warn('Auth loading timeout - forcing load complete')
+        setLoading(false)
+      }
+    }, 5000) // 5 second timeout
+
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setLoading(false)
+      if (mounted) {
+        setSession(session)
+        setLoading(false)
+        clearTimeout(timeout)
+      }
+    }).catch((error) => {
+      console.error('Auth session error:', error)
+      if (mounted) {
+        setLoading(false)
+        clearTimeout(timeout)
+      }
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        setSession(session)
+        if (mounted) {
+          setSession(session)
+        }
       }
     )
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      clearTimeout(timeout)
+      subscription.unsubscribe()
+    }
   }, [])
 
   // Ensure a profiles row exists the first time someone logs in
