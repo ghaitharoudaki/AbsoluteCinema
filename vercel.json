@@ -1,7 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install && npm install --prefix apps/web",
+  "buildCommand": "npm run build --prefix apps/web",
+  "outputDirectory": "apps/web/dist",
   "rewrites": [
     { "source": "/api/auth/:path*", "destination": "/api/auth" },
-    { "source": "/api/app/:path*", "destination": "/api/app" }
+    { "source": "/api/app/:path*", "destination": "/api/app" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
